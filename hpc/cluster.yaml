@@ -1,0 +1,7 @@
+# Overrides for a VM or cluster where the conda env is already active (merged over config/default.yaml).
+# project_dir and output.work_dir are passed by the run scripts with --set.
+solver:
+  procs_per_case: 1
+  # The job script already activates the conda env, so nothing to do here.
+  activate: "true"
+  conv_poll_seconds: 30

@@ -1,0 +1,103 @@
+# Default configuration for the terrain-wind CFD surrogate.
+# Every path below is relative to `project_dir` unless absolute.
+
+project_dir: ./runs/idaho            # on Colab: /content/drive/MyDrive/windsurrogate/idaho
+
+# Areas where case centres are sampled. bbox = lon_min, lat_min, lon_max, lat_max (WGS84).
+# Each region gets its own master DEM in its own UTM zone; cases are split between
+# regions in proportion to area unless a `weight` is given.
+regions:
+  - name: cervidae
+    # Cervidae Peak (43.614 N, 115.974 W), Lucky Peak / Arrowrock, Boise Front, Bogus Basin.
+    bbox: [-116.42, 43.27, -115.52, 43.97]
+    crs: EPSG:32611                    # UTM 11N
+  - name: lost_river
+    # Lost River Range (Borah Peak 44.138 N, 113.781 W) with the Big Lost, Little Lost
+    # and Pahsimeroi valleys, Challis to Arco.
+    bbox: [-114.35, 43.55, -112.95, 44.60]
+    crs: EPSG:32612                    # UTM 12N
+
+dem:
+  source: usgs3dep_1                   # usgs3dep_1 (~30 m) | usgs3dep_13 (~10 m) | copernicus30 | local
+  local_path: null                     # source == local: GeoTIFF path, glob or list (e.g. "dem_raw/*.tif")
+  resolution: 30.0                     # master DEM pixel size (m)
+  margin_km: 13                        # DEM extra around each bbox (>= CFD domain radius)
+  dir: dem                             # master DEMs are written as dem/<region>.tif
+
+geometry:
+  # All lengths in metres. Frame is rotated per case so the wind always
+  # blows towards +x (enters through the x-min "inlet" patch).
+  dx: 50.0                             # fine cell size = network pixel size
+  core_px: 128                         # labelled output tile (loss region)
+  input_upwind_px: 96                  # network input context upwind of the core
+  input_downwind_px: 32
+  input_lateral_px: 32                 # each side
+  fine_margin_cells: 8                 # fine cells kept around the core in the CFD mesh
+  taper_m: 1500                        # real terrain -> flat blend outside the input window
+  flat_m: 500                          # flat strip next to the boundaries
+  growth: 1.15                         # horizontal cell growth outside the fine region
+  max_cell_m: 300
+  nz: 30
+  first_cell_m: 5.0                    # must stay well above z0
+  top_above_max_m: 2500                # domain top = max(terrain) + this
+  min_top_m: 3000
+
+flow:
+  Uref: 10.0                           # inlet speed at Zref above the flat inflow ground
+  Zref: 100.0
+  z0_range: [0.02, 0.5]                # sampled log-uniformly per case
+  kappa: 0.40                          # 0.40 with sigmaEps=1.11 keeps the inflow profile in equilibrium (Hargreaves & Wright 2007)
+  Cmu: 0.09
+  turbulence_model: kEpsilon           # kEpsilon (ABL-tuned) | RNGkEpsilon | kOmegaSST
+  top_bc: shear                        # shear (Richards & Hoxey constant stress) | slip
+
+solver:
+  max_iter: 1500
+  # Stopping rule: normalised residuals dip below 1e-5 long before the near-ground
+  # flow settles on terrain meshes, so the runner watches 98 probes over the core
+  # (10 m and 100 m AGL) and stops once they change < conv_tol*Uref over conv_window.
+  min_iter: 300
+  avg_start_iter: 1000                 # iteration average kept from here; used if a case never settles
+  conv_tol: 2.0e-3                     # max probe change over conv_window iters, / Uref
+  conv_window: 200
+  conv_poll_seconds: 20
+  residual_p: 1.0e-4                   # last-resort residual exit (rarely reached)
+  residual_U: 1.0e-7
+  residual_turb: 1.0e-7
+  procs_per_case: 1                    # MPI ranks per case
+  concurrent_cases: 4                  # cases run side by side on one machine
+  non_orth_correctors: auto            # auto: 1 if checkMesh non-orthogonality > 50 deg, else 0
+  timeout_hours: 6
+  activate: >-
+    eval "$(micromamba shell hook -s bash)" && micromamba activate foam
+  keep_failed_cases: false
+
+sampling:
+  n_cases: 2000
+  split_block_km: 20                   # spatial blocks for train/val/test (no leakage)
+  split_fractions: [0.8, 0.1, 0.1]
+  min_relief_m: 0                      # reject cores flatter than this (0 keeps all)
+  relief_ref_m: 400                    # acceptance prob ~ min(1, floor + relief/relief_ref)
+  relief_floor: 0.25
+  seed: 42
+
+output:
+  heights_agl: [10, 50, 100, 200, 400]
+  dataset_dir: dataset                 # one .npz per finished case
+  cases_file: cases.jsonl
+  topology_dir: topology               # shared polyMesh (same for every case)
+  work_dir: /tmp/windsurrogate_work    # fast local disk for running cases
+
+train:
+  base_channels: 48
+  depth: 4
+  batch_size: 8
+  epochs: 120
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 2
+  amp: true
+  flip_augment: true
+  attn_layers: 2                       # transformer layers at the U-Net bottleneck (global context)
+  max_probe_change: 0.01               # drop cases whose probes still moved > 1% Uref at the end
+  checkpoint_dir: checkpoints

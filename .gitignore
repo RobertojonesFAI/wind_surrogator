@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data and results (live on Drive / cluster storage, not in git)
+runs/
+dataset/
+dem/
+dem_raw/
+predictions/
+checkpoints/
+logs/
+_work/
+*.npz
+*.pt
+*.tif
+*.tif.part
+*.log

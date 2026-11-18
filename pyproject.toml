@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "windsurrogate"
+version = "0.1.0"
+description = "Terrain wind surrogate: OpenFOAM RANS cases over DEM tiles, a U-Net trained to reproduce them, and tiled inference over large DEMs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "rasterio",
+    "pyproj",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+ml = ["torch>=2.1"]
+dev = ["pytest"]
+
+[project.scripts]
+windsurrogate = "windsurrogate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["windsurrogate*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

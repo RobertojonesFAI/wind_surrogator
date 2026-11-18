@@ -1,0 +1,8 @@
+numpy
+scipy
+rasterio
+pyproj
+pyyaml
+matplotlib
+torch          # only for training / evaluation / prediction
+# OpenFOAM v2412 (openfoam.com) is installed separately: conda-forge `openfoam=2412` (see environment.yml)

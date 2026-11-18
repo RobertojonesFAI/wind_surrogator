@@ -1,0 +1,15 @@
+# Conda environment for the CFD side (OpenFOAM v2412 from openfoam.com, via conda-forge).
+#   micromamba create -f environment.yml && micromamba activate foam
+# Training and prediction also need PyTorch: pip install -e ".[ml]" (GPU runtime recommended).
+name: foam
+channels:
+  - conda-forge
+dependencies:
+  - openfoam=2412
+  - python=3.11
+  - numpy
+  - scipy
+  - rasterio
+  - pyproj
+  - pyyaml
+  - matplotlib
