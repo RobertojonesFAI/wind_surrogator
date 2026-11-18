@@ -5,3 +5,5 @@ solver:
   # The job script already activates the conda env, so nothing to do here.
   activate: "true"
   conv_poll_seconds: 30
+  pin_cores: true          # one case per physical core, memory on that core's socket
+  timeout_hours: 12        # many cases share each node's memory bandwidth, so cases run slower than alone

@@ -66,6 +66,7 @@ solver:
   residual_turb: 1.0e-7
   procs_per_case: 1                    # MPI ranks per case
   concurrent_cases: 4                  # cases run side by side on one machine
+  pin_cores: auto                      # pin each serial case to one physical core + its NUMA memory (auto: when enough cores)
   non_orth_correctors: auto            # auto: 1 if checkMesh non-orthogonality > 50 deg, else 0
   timeout_hours: 6
   activate: >-

@@ -13,6 +13,7 @@ export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/mamba}"
 eval "$("$HOME/bin/micromamba" shell hook -s bash)"
 micromamba activate foam
 export OMP_NUM_THREADS=1
+export PYTHONUNBUFFERED=1
 cd "$(dirname "$0")/.."
 
 ARGS=(--config hpc/cluster.yaml --set "project_dir=$PROJECT" --set "output.work_dir=$WORK")
@@ -22,7 +23,7 @@ if [ "${1:-}" = "status" ]; then
 fi
 
 TPC=$(lscpu | awk -F: '/Thread\(s\) per core/ {gsub(/ /,"",$2); print $2}')
-CONCURRENT=$(( $(nproc) / ${TPC:-1} ))
+CONCURRENT="${CONCURRENT:-$(( $(nproc) / ${TPC:-1} ))}"
 [ "$CONCURRENT" -lt 1 ] && CONCURRENT=1
 mkdir -p "$PROJECT" "$WORK"
 

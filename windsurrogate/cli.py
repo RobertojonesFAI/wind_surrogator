@@ -77,6 +77,12 @@ def cmd_predict(args):
                            z0=args.z0, uref=args.uref, bbox=args.bbox, device=args.device)
 
 
+def cmd_bench(args):
+    from .bench import bench
+    bench(_cfg(args), copies=[int(x) for x in args.copies.split(",")], iters=args.iters,
+          modes=args.modes.split(","), case_index=args.case_index, work_dir=args.work_dir)
+
+
 def cmd_evaluate(args):
     from .ml.evaluate import evaluate_checkpoint
     evaluate_checkpoint(_cfg(args), args.checkpoint, split=args.split, out_dir=args.out,
@@ -126,6 +132,14 @@ def main(argv=None):
     p.add_argument("--bbox", type=float, nargs=4, default=None, help="xmin ymin xmax ymax in DEM CRS")
     p.add_argument("--device", default=None)
     p.set_defaults(func=cmd_predict)
+
+    p = sub.add_parser("bench", help="measure solver speed for n simultaneous cases, pinned or not")
+    p.add_argument("--copies", default="1,24,48", help="comma-separated numbers of simultaneous cases")
+    p.add_argument("--iters", type=int, default=30, help="iterations per run")
+    p.add_argument("--modes", default="pin,nopin", help="pin, nopin or both")
+    p.add_argument("--case-index", type=int, default=0, help="which case of cases.jsonl to copy")
+    p.add_argument("--work-dir", default=None, help="scratch folder (default: output.work_dir)")
+    p.set_defaults(func=cmd_bench)
 
     p = sub.add_parser("evaluate", help="metrics and CFD-vs-surrogate figures on a split (default: test)")
     p.add_argument("--checkpoint", required=True)

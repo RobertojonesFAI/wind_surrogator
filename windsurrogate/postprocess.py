@@ -52,13 +52,35 @@ def parse_log(log: Path) -> dict:
                 diverged=("nan" in txt.lower() and "Floating point exception" in txt) or "FOAM FATAL" in txt)
 
 
+def _tail_lines(path: Path, n: int) -> list[str]:
+    """Last n complete lines of a text file, without reading the whole file.
+
+    The probe file grows by one line per iteration; reading only its end keeps the
+    convergence check cheap when dozens of cases are polled by one process.
+    """
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        block, data = 1 << 16, b""
+        while size > 0 and data.count(b"\n") <= n:
+            step = min(block, size)
+            size -= step
+            f.seek(size)
+            data = f.read(step) + data
+            block *= 2
+    lines = data.decode(errors="replace").splitlines()
+    if size > 0:
+        lines = lines[1:]          # first line may be partial
+    return lines[-n:]
+
+
 def probe_convergence(case_dir: Path, uref: float, window: int = 100) -> dict:
     """Max change of probed U over the last `window` iterations, relative to Uref."""
     files = sorted(Path(case_dir).glob("postProcessing/probes/*/U"))
     if not files:
         return {}
     rows = []
-    for line in files[-1].read_text().splitlines():
+    for line in _tail_lines(files[-1], window + 20):
         if line.startswith("#") or not line.strip():
             continue
         nums = np.array(line.replace("(", " ").replace(")", " ").split(), dtype=float)

@@ -4,6 +4,10 @@
 #
 #   mkdir -p logs && sbatch -p <partition> --array=0-7 hpc/run_cfd.slurm   # 8 nodes, NUM_SHARDS=8
 #
+# Each task asks for 48 cores of one node (-c 48). On nodes with a different core count,
+# override it, e.g. sbatch -c 36 --mem=170G ... Before a large run, measure the best number
+# of cases per node with `windsurrogate bench` (see docs/hpc.md) and pass CONCURRENT=<n>.
+#
 # Resumable: resubmit the same command after a time limit, a failure or a preemption;
 # finished cases are skipped. NUM_SHARDS must equal the number of array tasks and must
 # not change while jobs of the same batch are still running.
@@ -14,8 +18,8 @@
 #SBATCH -J windcfd
 #SBATCH -N 1
 #SBATCH --ntasks=1
-#SBATCH --exclusive
-#SBATCH --mem=0
+#SBATCH -c 48
+#SBATCH --mem=170G
 #SBATCH -t 7-00:00:00
 #SBATCH -o logs/windcfd_%A_%a.out
 
@@ -32,9 +36,12 @@ export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/mamba}"
 eval "$("$HOME/bin/micromamba" shell hook -s bash)"
 micromamba activate foam
 export OMP_NUM_THREADS=1
+export PYTHONUNBUFFERED=1          # progress lines reach the log immediately
 
 if [ -z "${STOP_HOURS:-}" ]; then
-  LEFT=$(squeue -h -j "${SLURM_JOB_ID:-0}" -o %L 2>/dev/null || true)
+  # In a job array, query this task only (the array's job id would list every task).
+  if [ -n "${SLURM_ARRAY_JOB_ID:-}" ]; then JID="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"; else JID="${SLURM_JOB_ID:-0}"; fi
+  LEFT=$(squeue -h -j "$JID" -o %L 2>/dev/null | head -1 || true)
   STOP_HOURS=$(python - "$LEFT" <<'EOF'
 import sys
 s = sys.argv[1].strip()
@@ -58,10 +65,10 @@ CODE_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
 cd "$CODE_DIR"
 mkdir -p logs
 SHARD="${SLURM_ARRAY_TASK_ID:-0}"
-NCPU="${SLURM_CPUS_ON_NODE:-$(nproc)}"
+NCPU="${SLURM_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE:-$(nproc)}}"
 # Physical cores: one case per core (hyper-threads do not help OpenFOAM much).
 TPC=$(lscpu | awk -F: '/Thread\(s\) per core/ {gsub(/ /,"",$2); print $2}')
-CONCURRENT=$(( NCPU / ${TPC:-1} ))
+CONCURRENT="${CONCURRENT:-$(( NCPU / ${TPC:-1} ))}"
 # Running cases need ~0.3 GB of disk each: use node-local disk if it has room, else $PROJECT.
 LOCAL="${TMPDIR:-/tmp}"
 FREE_GB=$(df -BG --output=avail "$LOCAL" | tail -1 | tr -dc '0-9')

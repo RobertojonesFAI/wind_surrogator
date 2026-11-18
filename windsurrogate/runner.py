@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -96,7 +97,9 @@ def run_monitored(cmd: str, case_dir: Path, env: dict, cfg, timeout: float) -> b
     return stopped
 
 
-def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path, env: dict) -> dict:
+def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path, env: dict,
+             prefix: str = "") -> dict:
+    """Run one case. `prefix` is prepended to the solver command (e.g. core pinning)."""
     s = cfg["solver"]
     work = Path(cfg["output"]["work_dir"]).expanduser()
     case_dir = work / case["case_id"]
@@ -122,7 +125,7 @@ def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path
             stopped = run_monitored(f"mpirun -np {nproc} simpleFoam -parallel", case_dir, env, cfg, timeout)
             run(["reconstructPar", "-latestTime"], case_dir, env, case_dir / "log.reconstructPar")
         else:
-            stopped = run_monitored("simpleFoam", case_dir, env, cfg, timeout)
+            stopped = run_monitored(f"{prefix}simpleFoam", case_dir, env, cfg, timeout)
         info.update(parse_log(case_dir / "log.simpleFoam"))
         conv = probe_convergence(case_dir, cfg["flow"]["Uref"], window=int(s.get("conv_window", 200)))
         info.update(conv)
@@ -194,7 +197,7 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     cfg["output"]["work_dir"] = str(work)
     topo_dir = work / "_topology"
     meta = make_topology(cfg, geom, topo_dir, env)
-    print(f"[topology] {geom.summary()} -> {meta}")
+    print(f"[topology] {geom.summary()} -> {meta}", flush=True)
     from .dem import region_dem_path, regions
     regs = regions(cfg)
     todo = pending_cases(cfg, shard, n_shards)
@@ -203,7 +206,14 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     if limit:
         todo = todo[:limit]
     concurrent = int(concurrent or cfg["solver"]["concurrent_cases"])
-    print(f"[worker {shard}/{n_shards}] {len(todo)} pending cases, {concurrent} at a time")
+    from . import affinity
+    slots = None
+    if int(cfg["solver"]["procs_per_case"]) == 1 and affinity.pinning_enabled(cfg, concurrent):
+        slots = queue.Queue()
+        for slot in affinity.core_slots()[:concurrent]:
+            slots.put(slot)
+        print(f"[worker {shard}/{n_shards}] pinning each case to one core: {affinity.describe()}", flush=True)
+    print(f"[worker {shard}/{n_shards}] {len(todo)} pending cases, {concurrent} at a time", flush=True)
     deadline = time.time() + stop_after_hours * 3600 if stop_after_hours else None
     lock = threading.Lock()
     stats = dict(done=0, failed=0, secs=[])
@@ -212,7 +222,14 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     def job(c):
         if deadline and time.time() > deadline:
             return None
-        return run_case(cfg, geom, dems[c.get("region", regs[0]["name"])], c, topo_dir, env)
+        dem = dems[c.get("region", regs[0]["name"])]
+        if slots is None:
+            return run_case(cfg, geom, dem, c, topo_dir, env)
+        cpu, node = slots.get()
+        try:
+            return run_case(cfg, geom, dem, c, topo_dir, env, prefix=affinity.pin_prefix(cpu, node))
+        finally:
+            slots.put((cpu, node))
 
     with ThreadPoolExecutor(max_workers=concurrent) as ex:
         futs = {ex.submit(job, c): c for c in todo}
@@ -234,7 +251,7 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
                       f"t={info.get('wall_seconds')}s  ETA {eta:.1f} h"
                       + (f"  ERR {info.get('error', '')[:200]}" if info["status"] != "done" else ""),
                       flush=True)
-    print(f"[worker {shard}] finished: {stats['done']} done, {stats['failed']} failed")
+    print(f"[worker {shard}] finished: {stats['done']} done, {stats['failed']} failed", flush=True)
     shutil.rmtree(work, ignore_errors=True)
 
 
