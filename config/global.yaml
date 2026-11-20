@@ -1,0 +1,16 @@
+# Worldwide dataset (merged over config/default.yaml). On a cluster, combine it with the
+# cluster settings and point it at the project folder:
+#   python -m windsurrogate --config hpc/cluster.yaml --config config/global.yaml \
+#     --set project_dir=$PROJECT <command>
+#
+# The case list is a queue longer than the compute will finish: pilot cases first, then
+# a random order, so whatever finishes is a balanced sample. See docs/global.md.
+project_dir: ./runs/global
+
+output:
+  float16: true
+
+global:
+  sampling:
+    n_cases: 200000
+    n_pilot: 480

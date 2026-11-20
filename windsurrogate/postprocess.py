@@ -9,7 +9,7 @@ import numpy as np
 from . import foamio
 from .foamcase import cell_agl, inflow_profile, ustar
 from .geometry import CaseGeometry
-from .terrain import CaseTerrain
+from .terrain import CaseTerrain, case_z0
 
 
 def sample_agl(field: np.ndarray, agl: np.ndarray, heights) -> np.ndarray:
@@ -117,16 +117,22 @@ def build_sample(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case
     # Terrain under the core cells (CFD ground, cell centres) for consistency checks.
     h = terrain.h_nodes
     hc = 0.25 * (h[1:, 1:] + h[1:, :-1] + h[:-1, 1:] + h[:-1, :-1])
-    z0 = float(case["z0"])
+    z0 = case_z0(terrain, case)
     U_in, k_in, _, _ = inflow_profile(cfg, z0, heights)
-    return dict(
+    # Wind fields can be stored as float16 (relative precision ~5e-4, half the disk).
+    ft = np.float16 if cfg["output"].get("float16") else np.float32
+    out = dict(
         terrain_input=terrain.h_input.astype(np.float32),           # (rows, cols) m rel. base
         terrain_core=hc[js, is_].astype(np.float32),
-        U=np.moveaxis(Uh, -1, 1).astype(np.float32),                # (H, 3, N, N) m/s, wind frame
-        k=kh.astype(np.float32),                                    # (H, N, N) m2/s2
+        U=np.moveaxis(Uh, -1, 1).astype(ft),                        # (H, 3, N, N) m/s, wind frame
+        k=kh.astype(ft),                                            # (H, N, N) m2/s2
         heights=heights.astype(np.float32),
         U_inflow=U_in.astype(np.float32),                           # inflow speed at each height
         k_inflow=k_in.astype(np.float32),
         ustar=np.float32(ustar(cfg, z0)),
+        z0_ref=np.float32(z0),                                      # inflow roughness
         averaged=np.bool_(use_mean),
     )
+    if terrain.logz0_input is not None:
+        out["log10_z0_input"] = terrain.logz0_input.astype(np.float16)   # (rows, cols)
+    return out

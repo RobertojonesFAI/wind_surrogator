@@ -43,18 +43,23 @@ class Config(dict):
 
     @property
     def root(self) -> Path:
-        return Path(os.path.expanduser(self["project_dir"])).resolve()
+        return Path(os.path.expandvars(os.path.expanduser(self["project_dir"]))).resolve()
 
     def path(self, rel: str | os.PathLike) -> Path:
-        p = Path(os.path.expanduser(str(rel)))
+        p = Path(os.path.expandvars(os.path.expanduser(str(rel))))
         return p if p.is_absolute() else self.root / p
 
 
-def load_config(path: str | os.PathLike | None = None, overrides: list[str] | None = None) -> Config:
+def load_config(path=None, overrides: list[str] | None = None) -> Config:
+    """config/default.yaml, then each YAML in `path` (one path or a list) merged in order,
+    then `overrides` ('section.key=value')."""
     with open(DEFAULT_CONFIG) as f:
         cfg = yaml.safe_load(f)
-    if path is not None and Path(path).resolve() != DEFAULT_CONFIG:
-        with open(path) as f:
+    paths = path if isinstance(path, (list, tuple)) else ([] if path is None else [path])
+    for p in paths:
+        if Path(p).resolve() == DEFAULT_CONFIG:
+            continue
+        with open(p) as f:
             _deep_update(cfg, yaml.safe_load(f) or {})
     for item in overrides or []:
         keys, val = _parse_override(item)

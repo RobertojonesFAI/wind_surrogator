@@ -19,7 +19,7 @@ from ..geometry import CaseGeometry
 from .data import WindDataset, list_samples
 
 FLAT = np.array([1.0, 0.0, 0.0, 1.0], np.float32).reshape(1, 4, 1, 1)   # "flat terrain" answer
-RELIEF_BINS = [(0, 500), (500, 1000), (1000, 1e9)]
+RELIEF_BINS = [(0, 150), (150, 400), (400, 800), (800, 1500), (1500, 2500), (2500, 1e9)]
 
 
 def _case_errors(p: np.ndarray, t: np.ndarray):
@@ -98,7 +98,11 @@ def evaluate_checkpoint(cfg, checkpoint, split: str = "test", out_dir=None, n_fi
             add("all", se, sf, it, un)
             add(("region", region), se, sf, it, un)
             add(("relief", rbin), se, sf, it, un)
+            if meta.get("stratum") is not None:               # global cases
+                add(("stratum", str(meta["stratum"])), se, sf, it, un)
+                add(("group", str(meta.get("group"))), se, sf, it, un)
             row = dict(case_id=meta.get("case_id", f.stem), file=f.name, region=region, relief_m=relief,
+                       stratum=meta.get("stratum"), lat=meta.get("lat"), lon=meta.get("lon"),
                        theta=meta.get("theta"), z0=meta.get("z0"), converged=meta.get("converged"),
                        averaged=bool(meta.get("averaged", False)), loss=float(se.mean()),
                        baseline_loss=float(sf.mean()))
@@ -109,9 +113,11 @@ def evaluate_checkpoint(cfg, checkpoint, split: str = "test", out_dir=None, n_fi
             rows.append(row)
 
     metrics = {"checkpoint": str(checkpoint), "split": split, **_summary(*acc["all"][:4], acc["all"][4], heights)}
-    for kind in ("region", "relief"):
-        metrics[f"by_{kind}"] = {k[1]: _summary(*v[:4], v[4], heights)
-                                 for k, v in sorted(acc.items(), key=lambda kv: str(kv[0])) if k[0] == kind}
+    for kind in ("region", "relief", "stratum", "group"):
+        part = {k[1]: _summary(*v[:4], v[4], heights)
+                for k, v in sorted(acc.items(), key=lambda kv: str(kv[0])) if k[0] == kind}
+        if part:
+            metrics[f"by_{kind}"] = part
 
     (out_dir / f"metrics_{split}.json").write_text(json.dumps(metrics, indent=1))
     with open(out_dir / f"cases_{split}.csv", "w", newline="") as fh:

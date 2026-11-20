@@ -17,5 +17,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
-      - name: Unit tests (inference geometry, evaluation)
-        run: pytest -q tests/test_inference_geometry.py tests/test_evaluate.py
+      - name: Unit tests (inference geometry, evaluation, worldwide pipeline)
+        run: pytest -q tests/test_inference_geometry.py tests/test_evaluate.py tests/test_global.py

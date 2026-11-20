@@ -18,7 +18,8 @@ def plot_sample(npz_path, out_png, dx: float = 50.0, heights=(10, 100)) -> Path:
     hc = z["terrain_core"]
     N = hc.shape[0]
     ext = [-N * dx / 2000, N * dx / 2000, -N * dx / 2000, N * dx / 2000]
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10), constrained_layout=True)
+    has_z0 = "log10_z0_input" in z.files
+    fig, axes = plt.subplots(2, 4 if has_z0 else 3, figsize=(21 if has_z0 else 16, 10), constrained_layout=True)
     ax = axes[0, 0]
     im = ax.imshow(z["terrain_input"], origin="lower", cmap="terrain")
     r0, c0 = (z["terrain_input"].shape[0] - N) // 2, z["terrain_input"].shape[1] - N - (z["terrain_input"].shape[0] - N) // 2
@@ -54,10 +55,17 @@ def plot_sample(npz_path, out_png, dx: float = 50.0, heights=(10, 100)) -> Path:
     im = ax.imshow(ang, origin="lower", extent=ext, cmap="twilight_shifted", vmin=-90, vmax=90)
     ax.set_title(f"deflection at {H[0]} m (deg, + = to the left)")
     fig.colorbar(im, ax=ax, shrink=0.8)
-    for a in axes.ravel()[1:]:
+    if has_z0:
+        ax = axes[0, 3]
+        im = ax.imshow(z["log10_z0_input"].astype(np.float32), origin="lower", cmap="YlGn", vmin=-3.7, vmax=0.2)
+        ax.add_patch(plt.Rectangle((c0, r0), N, N, fill=False, ec="k", lw=1.5))
+        ax.set_title("log10 z0 (m) over the input window; box = core")
+        fig.colorbar(im, ax=ax, shrink=0.8)
+        axes[1, 3].axis("off")
+    for a in [a for a in axes.ravel()[1:] if a is not axes[0, -1] or not has_z0]:
         a.set_xlabel("x' downwind (km)")
         a.set_ylabel("y' (km)")
-    fig.suptitle(f"{meta['case_id']}  theta={meta['theta']}°  z0={meta['z0']} m  relief={meta.get('relief')} m  "
+    fig.suptitle(f"{meta['case_id']}  theta={meta['theta']}°  z0={float(meta['z0']):.3g} m  relief={meta.get('relief')} m  "
                  f"iters={meta.get('iterations')}  converged={meta.get('converged')}")
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)

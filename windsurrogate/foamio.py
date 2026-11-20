@@ -97,3 +97,26 @@ def latest_time_dir(case: Path) -> Path | None:
                 pass
     times.sort()
     return times[-1][1] if times and times[-1][0] > 0 else None
+
+
+def read_patch_field(path: Path, patch: str) -> np.ndarray:
+    """Values of one patch in the boundaryField of an ASCII field file (e.g. face centres
+    of a patch in the C field written by writeCellCentres)."""
+    raw = Path(path).read_bytes()
+    b = raw.index(b"boundaryField")
+    m = re.compile(rb"\n\s*" + re.escape(patch.encode()) + rb"\s*\{").search(raw, b)
+    if m is None:
+        raise ValueError(f"patch {patch} not found in {path}")
+    v = re.compile(rb"\bvalue\s+(uniform|nonuniform)").search(raw, m.end())
+    if v is None:
+        raise ValueError(f"patch {patch} in {path} has no value entry")
+    if v.group(1) == b"uniform":
+        end = raw.index(b";", v.end())
+        return np.array(raw[v.end():end].replace(b"(", b" ").replace(b")", b" ").split(), dtype=np.float64)
+    m2 = re.compile(rb"List<(\w+)>\s*(\d+)\s*\(").search(raw, v.end())
+    kind, count = m2.group(1), int(m2.group(2))
+    end = raw.index(b"\n)", m2.end())
+    body = raw[m2.end():end]
+    if kind == b"vector":
+        return np.array(body.replace(b"(", b" ").replace(b")", b" ").split(), dtype=np.float64).reshape(count, 3)
+    return np.array(body.split(), dtype=np.float64)

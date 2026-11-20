@@ -88,6 +88,70 @@ output:
   cases_file: cases.jsonl
   topology_dir: topology               # shared polyMesh (same for every case)
   work_dir: /tmp/windsurrogate_work    # fast local disk for running cases
+  float16: false                       # store U and k as float16 (half the disk; global runs use true)
+
+# Spatial roughness for global cases: ESA WorldCover class -> z0 (m). The network sees
+# log10(z0) as its 4th input channel; regional (v1) cases keep their uniform z0.
+landcover:
+  z0_table:
+    10: 0.8        # tree cover
+    20: 0.10       # shrubland
+    30: 0.03       # grassland
+    40: 0.05       # cropland
+    50: 0.8        # built-up
+    60: 0.01       # bare / sparse vegetation
+    70: 0.002      # snow and ice
+    80: 0.0002     # permanent water
+    90: 0.03       # herbaceous wetland
+    95: 0.6        # mangroves
+    100: 0.01      # moss and lichen
+  default_z0: 0.03                     # class 0 (no data)
+  z0_min: 0.0002
+  z0_max: 1.5
+
+# Worldwide dataset (commands global-descriptors, global-sample, global-fetch).
+# config/global.yaml sets the project folder and the sizes for a production run.
+global:
+  descriptors:
+    file: descriptors/glo90_cells.npz  # merged cell table
+    tiles_dir: descriptors/tiles       # one small file per GLO-90 tile (resumable)
+    decimate: 4                        # read GLO-90 at ~360 m (COG overviews)
+    cells_per_deg: 10                  # ~11 km cells
+    lat_range: [-56, 72]
+    threads: 24
+  sampling:
+    n_cases: 200000
+    seed: 7
+    fractions: {global: 0.70, hard: 0.10, sites: 0.20}
+    relief_bins: [0, 150, 400, 800, 1500, 2500, 1.0e9]    # m, P98-P2 over an ~11 km cell
+    relief_weights: [0.04, 0.12, 0.22, 0.26, 0.22, 0.14]  # share of global cases per bin
+    lat_range: [-56, 72]
+    max_sea_frac: 0.5
+    min_valid_frac: 0.6
+    hard_quantile: 0.97                # top 3 % by slope_p90 or relief
+    box_deg: 10                        # spreading: down-weight crowded 10-degree boxes
+    spread_power: 0.5
+    dirs_per_location: 2
+    site_dirs_per_location: 4
+    min_spacing_km: 3.0
+    site_min_spacing_km: 1.5
+    split_block_deg: 2
+    split_fractions: [0.9, 0.05, 0.05]
+    split_buffer_km: 12                # no val/test terrain within this distance of train terrain
+    z0_scale_range: [0.6, 1.6]         # random factor on the whole roughness map (log-uniform)
+    n_pilot: 480
+    sites_file: config/sites.yaml
+  terrain:
+    dir: terrain                       # crops: terrain/<L0001>/<L000123>.npz
+    locations_file: locations.jsonl
+    dem_source: fabdem                 # fabdem | copernicus30
+    fabdem_order: [bris, mirror, bris_full]
+    fabdem_mirror: "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles/{zip}/{name}"
+    fallback_copernicus: true          # tiles no FABDEM source can deliver come from GLO-30
+    tile_cache: dem_tiles/fabdem
+    crop_res: 30.0
+    crop_margin_m: 1000
+    threads: 12
 
 train:
   base_channels: 48

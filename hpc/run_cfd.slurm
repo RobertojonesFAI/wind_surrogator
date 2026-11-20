@@ -28,6 +28,8 @@ set -euo pipefail
 # ---- edit these ---------------------------------------------------------------
 PROJECT="${PROJECT:-$HOME/windsurrogate_runs/idaho}"   # results (shared storage)
 NUM_SHARDS="${NUM_SHARDS:-8}"                            # = number of array tasks
+# EXTRA_CONFIG: a second YAML merged after hpc/cluster.yaml, e.g. config/global.yaml
+# LIMIT: run at most this many cases per shard (pilot: LIMIT=60 with 8 shards = first 480)
 # STOP_HOURS: stop starting new cases after this many hours. Default: the job's
 # remaining time minus 2 h, so the cases already running can finish.
 # --------------------------------------------------------------------------------
@@ -83,8 +85,14 @@ echo "node $(hostname)  shard $SHARD/$NUM_SHARDS  cores $CONCURRENT  stop after 
 free -g | head -2
 df -h "$WORK" | tail -1
 
-python -m windsurrogate --config hpc/cluster.yaml \
+CONFIG_ARGS=(--config hpc/cluster.yaml)
+if [ -n "${EXTRA_CONFIG:-}" ]; then CONFIG_ARGS+=(--config "$EXTRA_CONFIG"); fi
+LIMIT_ARGS=()
+if [ -n "${LIMIT:-}" ]; then LIMIT_ARGS=(--limit "$LIMIT"); fi
+
+python -m windsurrogate "${CONFIG_ARGS[@]}" \
   --set "project_dir=$PROJECT" --set "output.work_dir=$WORK" \
-  run --shard "$SHARD" --num-shards "$NUM_SHARDS" --concurrent "$CONCURRENT" --hours "$STOP_HOURS"
+  run --shard "$SHARD" --num-shards "$NUM_SHARDS" --concurrent "$CONCURRENT" --hours "$STOP_HOURS" \
+  "${LIMIT_ARGS[@]}"
 
 rm -rf "$WORK"

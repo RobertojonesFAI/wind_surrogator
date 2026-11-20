@@ -31,6 +31,8 @@ Validation split (terrain blocks never used for training):
 - **Inference:** about 1 minute per wind direction for a ~133 × 138 km region at 50 m (A100).
 - **Test-split numbers:** produced with `windsurrogate evaluate` (see below).
 
+**Worldwide dataset** (same physics, terrain from every continent, roughness map from land cover): stratified sampling from a global terrain-descriptor grid, FABDEM / Copernicus elevation and ESA WorldCover per location, z0 per ground face in OpenFOAM. See [docs/global.md](docs/global.md).
+
 **v2** (stratified flow: foehn, downslope windstorms, hydraulic jumps, mountain waves, gap winds) is at the design stage; see [docs/v2-stratified-design.md](docs/v2-stratified-design.md).
 
 ## Physics and numerics (v1)
@@ -76,6 +78,17 @@ windsurrogate --config my.yaml status
 windsurrogate --config my.yaml train
 windsurrogate --config my.yaml evaluate --checkpoint runs/idaho/checkpoints/best.pt --split test
 windsurrogate predict --checkpoint best.pt --dem dem/lost_river.tif --out wind_270.tif --theta 270 --z0 0.1
+```
+
+Worldwide dataset ([docs/global.md](docs/global.md)):
+
+```bash
+G="windsurrogate --config config/global.yaml --set project_dir=runs/global"
+$G global-descriptors          # terrain statistics on a ~10 km world grid (GLO-90)
+$G global-sample               # stratified locations + case queue (pilot first)
+$G global-fetch                # elevation + land-cover crop per location
+$G run --shard 0 --num-shards 8
+$G status --by stratum --failures 10
 ```
 
 Any setting can be overridden with `--set`, for example `--set geometry.dx=60 --set sampling.n_cases=1500`.

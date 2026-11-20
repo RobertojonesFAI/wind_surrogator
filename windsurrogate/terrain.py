@@ -75,12 +75,28 @@ class CaseTerrain:
     h_input: np.ndarray         # (rows, cols) network input terrain relative to base (real)
     top: float                  # domain top (m above base)
     max_slope_deg: float
+    # Roughness. Uniform cases: z0_ref only (or None, then the case's "z0" is used).
+    # Spatial cases: z0_ref is the inflow roughness (geometric mean over the upwind part of
+    # the input window), logz0_input the log10(z0) map on the input grid, z0_ground the z0
+    # of every ground face (cell grid (ny, nx)), blended to z0_ref over the terrain taper.
+    z0_ref: float | None = None
+    logz0_input: np.ndarray | None = None
+    z0_ground: np.ndarray | None = None
 
 
-def case_terrain(geom: CaseGeometry, dem: MasterDEM, e_c: float, n_c: float, theta: float) -> CaseTerrain:
+Z0_BOUNDS = (2e-4, 1.5)
+
+
+def case_z0(terrain: CaseTerrain, case: dict) -> float:
+    """Inflow (reference) roughness of a case."""
+    return float(terrain.z0_ref) if terrain.z0_ref is not None else float(case["z0"])
+
+
+def case_terrain(geom: CaseGeometry, dem: MasterDEM, e_c: float, n_c: float, theta: float,
+                 z0: float | None = None, z0_scale: float = 1.0) -> CaseTerrain:
     patch = dem.patch(e_c, n_c, geom.radius + 1000.0)
-    sampler = SmoothedSampler(patch, cell_sizes=(geom.dx, 2 * geom.dx, 4 * geom.dx,
-                                                 max(8 * geom.dx, geom.max_cell_m)))
+    cell_sizes = (geom.dx, 2 * geom.dx, 4 * geom.dx, max(8 * geom.dx, geom.max_cell_m))
+    sampler = SmoothedSampler(patch, cell_sizes=cell_sizes)
     # Network input grid (cell centres, real terrain).
     xc, yc = geom.input_cell_centres()
     XC, YC = np.meshgrid(xc, yc)
@@ -104,8 +120,39 @@ def case_terrain(geom: CaseGeometry, dem: MasterDEM, e_c: float, n_c: float, the
     gy, gx = np.gradient(h_nodes, yn, xn)
     slope = float(np.degrees(np.arctan(np.hypot(gx, gy).max())))
     top = geom.domain_top(float(h_nodes.max()))
-    return CaseTerrain(base=base, h_nodes=h_nodes, h_input=(h_in - base).astype(np.float32),
-                       top=top, max_slope_deg=slope)
+    out = CaseTerrain(base=base, h_nodes=h_nodes, h_input=(h_in - base).astype(np.float32),
+                      top=top, max_slope_deg=slope, z0_ref=None if z0 is None else float(z0))
+    if patch.logz0 is not None:
+        _spatial_z0(out, geom, patch, e_c, n_c, theta, cell_sizes, z0_scale)
+    return out
+
+
+def _spatial_z0(out: CaseTerrain, geom: CaseGeometry, patch: MasterDEM, e_c, n_c, theta,
+                cell_sizes, z0_scale: float) -> None:
+    """Fill the roughness fields of `out` from the patch's log10(z0) map.
+
+    Smoothing log10(z0) over each cell gives the geometric-mean roughness of the cell.
+    """
+    lz_dem = MasterDEM(patch.logz0, patch.x0, patch.y0, patch.res, patch.crs)
+    ls = SmoothedSampler(lz_dem, cell_sizes=cell_sizes)
+    lo, hi = np.log10(Z0_BOUNDS[0]), np.log10(Z0_BOUNDS[1])
+    shift = float(np.log10(z0_scale))
+    xc, yc = geom.input_cell_centres()
+    XC, YC = np.meshgrid(xc, yc)
+    E, N = rotated_to_map(XC, YC, e_c, n_c, theta)
+    lz_in = np.clip(ls.sample(E, N, cell=geom.dx) + shift, lo, hi)
+    lz_ref = float(lz_in[:, :geom.input_upwind_px].mean())
+    # Ground faces = CFD cells of the bottom layer.
+    xn, yn = geom.x_nodes, geom.y_nodes
+    xm, ym = 0.5 * (xn[1:] + xn[:-1]), 0.5 * (yn[1:] + yn[:-1])
+    XM, YM = np.meshgrid(xm, ym)
+    cell = np.maximum(np.diff(xn)[None, :], np.diff(yn)[:, None])
+    E, N = rotated_to_map(XM, YM, e_c, n_c, theta)
+    lz_c = np.clip(ls.sample(E, N, cell=cell) + shift, lo, hi)
+    w = geom.taper_weight(XM, YM)
+    out.z0_ref = float(10.0 ** lz_ref)
+    out.logz0_input = lz_in.astype(np.float32)
+    out.z0_ground = (10.0 ** (w * lz_c + (1.0 - w) * lz_ref)).astype(np.float64)
 
 
 def mesh_points(geom: CaseGeometry, terrain: CaseTerrain) -> np.ndarray:

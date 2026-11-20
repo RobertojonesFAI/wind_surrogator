@@ -20,7 +20,7 @@ from .foamcase import foam_env, make_topology, run, set_non_orth, write_case
 from .geometry import CaseGeometry
 from .postprocess import build_sample, parse_log, probe_convergence
 from .sampling import read_cases
-from .terrain import case_terrain
+from .terrain import case_terrain, case_z0
 
 
 def dataset_paths(cfg):
@@ -108,8 +108,10 @@ def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path
     t0 = time.time()
     info = dict(case, status="running", started=time.strftime("%Y-%m-%d %H:%M:%S"))
     try:
-        terrain = case_terrain(geom, dem, case["center_e"], case["center_n"], case["theta"])
-        info.update(base=terrain.base, top=terrain.top, max_slope_deg=terrain.max_slope_deg)
+        terrain = case_terrain(geom, dem, case["center_e"], case["center_n"], case["theta"],
+                               z0=case.get("z0"), z0_scale=float(case.get("z0_scale", 1.0)))
+        info.update(base=terrain.base, top=terrain.top, max_slope_deg=terrain.max_slope_deg,
+                    z0=case_z0(terrain, case))
         write_case(cfg, geom, terrain, case, case_dir, topo_dir)
         run(["checkMesh", "-constant", "-noTopology"], case_dir, env, case_dir / "log.checkMesh")
         info.update(parse_checkmesh(case_dir / "log.checkMesh"))
@@ -158,18 +160,50 @@ def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path
     return info
 
 
-def pending_cases(cfg, shard: int = 0, n_shards: int = 1, max_attempts: int = 2) -> list[dict]:
+def _listing(cfg) -> tuple[set, set]:
+    """(finished sample files as (split, case_id), case ids with a status file), one directory
+    listing each: much faster than a stat per case on a parallel file system."""
+    root, sdir = dataset_paths(cfg)
+    done = set()
+    for split in ("train", "val", "test"):
+        d = root / split
+        if d.is_dir():
+            with os.scandir(d) as it:
+                done |= {(split, e.name[:-4]) for e in it if e.name.endswith(".npz") and not e.name.startswith(".")}
+    status = set()
+    if sdir.is_dir():
+        with os.scandir(sdir) as it:
+            status = {e.name[:-5] for e in it if e.name.endswith(".json") and not e.name.startswith(".")}
+    return done, status
+
+
+def terrain_ready(cfg, case: dict) -> bool:
+    """Regional cases always; global cases once their terrain crop exists."""
+    t = case.get("terrain")
+    return t is None or (cfg.root / t).exists()
+
+
+def pending_cases(cfg, shard: int = 0, n_shards: int = 1, max_attempts: int = 2,
+                  verbose: bool = False) -> list[dict]:
     cases = read_cases(cfg.path(cfg["output"]["cases_file"]))
-    todo = []
+    done, status = _listing(cfg)
+    todo, waiting = [], 0
     for i, c in enumerate(cases):
         if i % n_shards != shard:
             continue
-        if sample_path(cfg, c).exists():
+        if (c["split"], c["case_id"]) in done:
             continue
-        st = _read_status(cfg, c["case_id"])
-        if st and st.get("status") == "failed" and st.get("attempts", 0) >= max_attempts:
+        if c["case_id"] in status:
+            st = _read_status(cfg, c["case_id"])
+            if st and st.get("status") == "failed" and st.get("attempts", 0) >= max_attempts:
+                continue
+        if not terrain_ready(cfg, c):
+            waiting += 1
             continue
         todo.append(c)
+    if verbose and waiting:
+        print(f"[shard {shard}/{n_shards}] {waiting} cases wait for their terrain crop (run global-fetch)",
+              flush=True)
     return todo
 
 
@@ -198,11 +232,17 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     topo_dir = work / "_topology"
     meta = make_topology(cfg, geom, topo_dir, env)
     print(f"[topology] {geom.summary()} -> {meta}", flush=True)
+    from .crops import CropCache
     from .dem import region_dem_path, regions
-    regs = regions(cfg)
-    todo = pending_cases(cfg, shard, n_shards)
-    needed = {c.get("region", regs[0]["name"]) for c in todo}
+    todo = pending_cases(cfg, shard, n_shards, verbose=True)
+    regional = [c for c in todo if not c.get("terrain")]
+    regs = regions(cfg) if regional else []
+    needed = {c.get("region", regs[0]["name"]) for c in regional}
     dems = {name: MasterDEM.open(region_dem_path(cfg, name)) for name in sorted(needed)}
+    crops = CropCache(cfg)
+
+    def dem_for(c):
+        return crops(c["terrain"]) if c.get("terrain") else dems[c.get("region", regs[0]["name"])]
     if limit:
         todo = todo[:limit]
     concurrent = int(concurrent or cfg["solver"]["concurrent_cases"])
@@ -222,7 +262,7 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     def job(c):
         if deadline and time.time() > deadline:
             return None
-        dem = dems[c.get("region", regs[0]["name"])]
+        dem = dem_for(c)
         if slots is None:
             return run_case(cfg, geom, dem, c, topo_dir, env)
         cpu, node = slots.get()
@@ -255,24 +295,105 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     shutil.rmtree(work, ignore_errors=True)
 
 
-def status_summary(cfg) -> dict:
+def status_summary(cfg, by: str | None = None) -> dict:
+    """Progress of the case list. `by` (e.g. stratum, group, region, split) adds a breakdown
+    with finished cases, failures, convergence rate and mean case time per group."""
     cases = read_cases(cfg.path(cfg["output"]["cases_file"]))
-    out = {"total": len(cases), "done": 0, "failed": 0, "pending": 0, "by_split": {}, "converged": 0}
+    done, status = _listing(cfg)
+    out = {"total": len(cases), "done": 0, "failed": 0, "pending": 0, "waiting_terrain": 0,
+           "by_split": {}, "converged": 0}
     secs = []
+    groups: dict[str, dict] = {}
     for c in cases:
         sp = out["by_split"].setdefault(c["split"], {"total": 0, "done": 0})
         sp["total"] += 1
-        st = _read_status(cfg, c["case_id"])
-        if sample_path(cfg, c).exists():
+        g = None
+        if by:
+            g = groups.setdefault(str(c.get(by)), {"total": 0, "done": 0, "failed": 0, "converged": 0,
+                                                    "secs": [], "slope": []})
+            g["total"] += 1
+        st = _read_status(cfg, c["case_id"]) if c["case_id"] in status else None
+        if (c["split"], c["case_id"]) in done:
             out["done"] += 1
             sp["done"] += 1
             if st:
                 secs.append(st.get("wall_seconds", 0))
                 out["converged"] += bool(st.get("converged"))
+                if g is not None:
+                    g["secs"].append(st.get("wall_seconds", 0))
+                    g["converged"] += bool(st.get("converged"))
+                    if st.get("max_slope_deg") is not None:
+                        g["slope"].append(st["max_slope_deg"])
+            if g is not None:
+                g["done"] += 1
         elif st and st.get("status") == "failed":
             out["failed"] += 1
+            if g is not None:
+                g["failed"] += 1
+        elif not terrain_ready(cfg, c):
+            out["waiting_terrain"] += 1
         else:
             out["pending"] += 1
     if secs:
         out["mean_case_minutes"] = round(float(np.mean(secs)) / 60, 1)
+    if by:
+        table = {}
+        for k, g in sorted(groups.items()):
+            row = {"total": g["total"], "done": g["done"], "failed": g["failed"]}
+            if g["done"]:
+                row["converged_frac"] = round(g["converged"] / g["done"], 3)
+            if g["secs"]:
+                row["mean_minutes"] = round(float(np.mean(g["secs"])) / 60, 1)
+                row["p90_minutes"] = round(float(np.percentile(g["secs"], 90)) / 60, 1)
+            if g["slope"]:
+                row["max_slope_p90_deg"] = round(float(np.percentile(g["slope"], 90)), 1)
+            table[k] = row
+        out[f"by_{by}"] = table
     return out
+
+
+def failure_summary(cfg, n: int = 10) -> list[dict]:
+    """Most common error messages among failed cases."""
+    _, status = _listing(cfg)
+    from collections import Counter
+    errs, examples = Counter(), {}
+    for cid in status:
+        st = _read_status(cfg, cid)
+        if st and st.get("status") == "failed":
+            key = (st.get("error") or "").splitlines()[0][:160]
+            errs[key] += 1
+            examples.setdefault(key, cid)
+    return [{"error": k, "count": v, "example": examples[k]} for k, v in errs.most_common(n)]
+
+
+def reorder_pending(cfg, weights: dict[str, float], key: str = "stratum", seed: int = 0) -> dict:
+    """Re-prioritise the pending part of the case list.
+
+    Finished and failed cases keep their place at the front; pending cases are put in a
+    weighted random order (weight per value of `key`, default 1), so groups with a higher
+    weight come up earlier. Case ids and files do not change. Run it only while no worker
+    is running: shards are assigned by position in the list.
+    """
+    import json as _json
+    path = cfg.path(cfg["output"]["cases_file"])
+    cases = read_cases(path)
+    done, status = _listing(cfg)
+    finished, pending = [], []
+    for c in cases:
+        if (c["split"], c["case_id"]) in done or c["case_id"] in status:
+            finished.append(c)
+        else:
+            pending.append(c)
+    rng = np.random.default_rng(seed)
+    w = np.array([max(float(weights.get(str(c.get(key)), 1.0)), 1e-9) for c in pending])
+    # Exponential race: sorting by E/w gives a weighted random permutation.
+    order = np.argsort(rng.exponential(size=len(pending)) / w, kind="stable")
+    new = finished + [pending[i] for i in order]
+    backup = path.with_name(path.name + time.strftime(".bak-%Y%m%d-%H%M%S"))
+    shutil.copy2(path, backup)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        for c in new:
+            f.write(_json.dumps(c) + "\n")
+    os.replace(tmp, path)
+    return {"finished_or_failed": len(finished), "pending": len(pending), "backup": str(backup)}

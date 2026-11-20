@@ -71,7 +71,7 @@ The efficiency factor covers queue gaps, cases cut by the time limit, and cases 
 
 Each case writes ~1.4 MB, so 100,000 cases need ~140 GB. Running cases also need ~0.3 GB of scratch each, preferably on node-local disk.
 
-More cases of the same two regions add little once the terrain is well covered. A large allocation is better spent on new regions or on the stratified v2 ([v2-stratified-design.md](v2-stratified-design.md)).
+More cases of the same two regions add little once the terrain is well covered. A large allocation is better spent on new terrain (the worldwide dataset, [global.md](global.md)) or on the stratified v2 ([v2-stratified-design.md](v2-stratified-design.md)).
 
 ## Single VM (e.g. a cloud VM)
 

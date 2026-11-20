@@ -11,15 +11,19 @@ Z0_CENTER, Z0_SCALE = -1.0, 0.7   # log10(z0) normalisation
 CHANNELS_PER_HEIGHT = ("u", "v", "w", "k")
 
 
-def input_channels(h: np.ndarray, dx: float, z0: float | np.ndarray, core_slice) -> np.ndarray:
+def input_channels(h: np.ndarray, dx: float, z0: float | np.ndarray | None, core_slice,
+                   log10_z0: np.ndarray | None = None) -> np.ndarray:
     """Build (4, rows, cols) network input from terrain h (m) on the wind-aligned grid.
 
     Channels: elevation relative to the core mean / H_SCALE, dh/dx, dh/dy, log10(z0).
+    Roughness is a scalar or map `z0` (m), or directly a log10(z0) map `log10_z0`.
     """
     h = np.asarray(h, np.float32)
     ref = float(h[core_slice].mean())
     gy, gx = np.gradient(h, dx)
-    z0c = (np.log10(np.broadcast_to(np.asarray(z0, np.float32), h.shape)) - Z0_CENTER) / Z0_SCALE
+    lz = (np.asarray(log10_z0, np.float32) if log10_z0 is not None
+          else np.log10(np.asarray(z0, np.float32)))
+    z0c = (np.broadcast_to(lz, h.shape) - Z0_CENTER) / Z0_SCALE
     return np.stack([(h - ref) / H_SCALE, gx, gy, z0c]).astype(np.float32)
 
 
@@ -44,7 +48,8 @@ def list_samples(dataset_dir: Path, split: str, max_probe_change: float | None =
     """Samples of a split; optionally drop cases whose probes were still moving at the end
     (max change over the last window, relative to Uref, above `max_probe_change`) unless
     their label is the iteration average of an oscillating solution."""
-    files = sorted((Path(dataset_dir) / split).glob("c*.npz"))
+    # c*: regional cases (v1), g*: global cases. Hidden ".*.tmp.npz" files are in-progress writes.
+    files = sorted(f for f in (Path(dataset_dir) / split).glob("[cg]*.npz"))
     if not max_probe_change:
         return files
     keep = []
@@ -71,8 +76,11 @@ class WindDataset:
     def load(self, f):
         with np.load(f) as z:
             meta = json.loads(str(z["meta"]))
-            x = input_channels(z["terrain_input"], self.geom.dx, meta["z0"], self.geom.core_slice_in_input)
-            y = normalise_targets(z["U"], z["k"], z["U_inflow"], z["k_inflow"])
+            lz = z["log10_z0_input"].astype(np.float32) if "log10_z0_input" in z.files else None
+            x = input_channels(z["terrain_input"], self.geom.dx, meta["z0"], self.geom.core_slice_in_input,
+                               log10_z0=lz)
+            y = normalise_targets(z["U"].astype(np.float32), z["k"].astype(np.float32),
+                                  z["U_inflow"], z["k_inflow"])
         return x, y, meta
 
     def __getitem__(self, i):

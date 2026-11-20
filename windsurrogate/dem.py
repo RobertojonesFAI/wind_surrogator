@@ -176,6 +176,7 @@ class MasterDEM:
     y0: float               # north edge
     res: float
     crs: str
+    logz0: np.ndarray | None = None   # optional log10(z0) map on the same grid
 
     @classmethod
     def open(cls, path) -> "MasterDEM":
@@ -207,8 +208,9 @@ class MasterDEM:
         rpx = int(math.ceil(radius / self.res)) + 2
         r0, r1 = max(0, int(r_c) - rpx), min(rows, int(r_c) + rpx + 1)
         c0, c1 = max(0, int(c_c) - rpx), min(cols, int(c_c) + rpx + 1)
+        lz = None if self.logz0 is None else self.logz0[r0:r1, c0:c1]
         return MasterDEM(self.data[r0:r1, c0:c1], self.x0 + c0 * self.res,
-                         self.y0 - r0 * self.res, self.res, self.crs)
+                         self.y0 - r0 * self.res, self.res, self.crs, lz)
 
 
 def synthetic_dem(path, size_km: float = 120.0, res: float = 30.0, seed: int = 0,

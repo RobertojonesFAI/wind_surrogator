@@ -11,9 +11,10 @@ import numpy as np
 
 from . import foamio
 from .geometry import CaseGeometry
-from .terrain import CaseTerrain, mesh_points
+from .terrain import CaseTerrain, case_z0, mesh_points
 
 POLY_FILES = ("faces", "owner", "neighbour", "boundary")
+GROUND_ORDER = "ground_order.npy"     # cell-column index (j * nx + i) of every ground face
 
 
 # --------------------------------------------------------------------------- environment
@@ -158,7 +159,8 @@ def make_topology(cfg, geom: CaseGeometry, topo_dir: Path, env: dict) -> dict:
     want = dict(nx=geom.nx, ny=geom.ny, nz=geom.nz)
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
-        if all(meta.get(k) == v for k, v in want.items()) and meta.get("ordering_ok"):
+        if all(meta.get(k) == v for k, v in want.items()) and meta.get("ordering_ok") \
+                and (topo_dir / GROUND_ORDER).exists():
             return meta
     topo_dir.mkdir(parents=True, exist_ok=True)
     foamio.write_dict(topo_dir / "system/controlDict", "controlDict",
@@ -184,8 +186,16 @@ def make_topology(cfg, geom: CaseGeometry, topo_dir: Path, env: dict) -> dict:
     cijk = np.floor(C).astype(np.int64)
     expect_c = cijk[:, 0] + nx * (cijk[:, 1] + ny * cijk[:, 2])
     cells_ok = bool(np.array_equal(expect_c, np.arange(len(C))))
-    meta = dict(want, points_ok=pts_ok, cells_ok=cells_ok, ordering_ok=pts_ok and cells_ok,
-                n_points=len(pts), n_cells=len(C))
+    # Ground faces: their centres (i+0.5, j+0.5, 0) give the cell column of every face, so a
+    # (ny, nx) map of roughness can be written as a per-face list in patch order.
+    Cg = foamio.read_patch_field(cfile, "ground")
+    gi, gj = np.floor(Cg[:, 0]).astype(np.int64), np.floor(Cg[:, 1]).astype(np.int64)
+    ground_order = gj * nx + gi
+    ground_ok = bool(len(Cg) == nx * ny and np.allclose(Cg[:, 2], 0.0)
+                     and np.array_equal(np.sort(ground_order), np.arange(nx * ny)))
+    np.save(topo_dir / GROUND_ORDER, ground_order)
+    meta = dict(want, points_ok=pts_ok, cells_ok=cells_ok, ground_ok=ground_ok,
+                ordering_ok=pts_ok and cells_ok and ground_ok, n_points=len(pts), n_cells=len(C))
     if not meta["ordering_ok"]:
         raise RuntimeError(f"unexpected blockMesh ordering: {meta}")
     for f in ("0/C", "0/Cx", "0/Cy", "0/Cz", "constant/C", "constant/Cx", "constant/Cy", "constant/Cz"):
@@ -303,8 +313,13 @@ def _abl_entries(cfg, z0: float) -> str:
 def write_case(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case_dir: Path,
                topo_dir: Path) -> None:
     f, s = cfg["flow"], cfg["solver"]
-    z0 = float(case["z0"])
+    z0 = case_z0(terrain, case)
     model, turb_body = _turbulence_properties(cfg)
+    if terrain.z0_ground is not None:
+        order = np.load(topo_dir / GROUND_ORDER)
+        z0_wall = foamio.nonuniform(terrain.z0_ground.reshape(-1)[order])
+    else:
+        z0_wall = f"uniform {z0}"
     case_dir.mkdir(parents=True, exist_ok=True)
 
     # Mesh: shared topology + case-specific points.
@@ -370,7 +385,7 @@ def write_case(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case_d
                            foamio.nonuniform(w0), f"""
     inlet  {{ type atmBoundaryLayerInletOmega; {abl} value uniform 1; }}
     outlet {{ type inletOutlet; inletValue uniform {w0.min():.6g}; value uniform {w0.min():.6g}; }}
-    ground {{ type atmOmegaWallFunction; z0 uniform {z0}; value uniform 1; }}
+    ground {{ type atmOmegaWallFunction; z0 {z0_wall}; value uniform 1; }}
     top    {{ {top_s} }}
     {sym}""")
     else:
@@ -378,13 +393,13 @@ def write_case(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case_d
                            foamio.nonuniform(e0), f"""
     inlet  {{ type atmBoundaryLayerInletEpsilon; {abl} value uniform 1; }}
     outlet {{ type inletOutlet; inletValue uniform {e0.min():.6g}; value uniform {e0.min():.6g}; }}
-    ground {{ type atmEpsilonWallFunction; z0 uniform {z0}; Cmu {f['Cmu']}; kappa {f['kappa']}; value uniform 1; }}
+    ground {{ type atmEpsilonWallFunction; z0 {z0_wall}; Cmu {f['Cmu']}; kappa {f['kappa']}; value uniform 1; }}
     top    {{ {top_s} }}
     {sym}""")
     foamio.write_field(case_dir / "0/nut", "volScalarField", "nut", "[0 2 -1 0 0 0 0]", "uniform 0", f"""
     inlet  {{ type calculated; value uniform 0; }}
     outlet {{ type calculated; value uniform 0; }}
-    ground {{ type atmNutkWallFunction; z0 uniform {z0}; Cmu {f['Cmu']}; kappa {f['kappa']}; boundNut true; value uniform 0; }}
+    ground {{ type atmNutkWallFunction; z0 {z0_wall}; Cmu {f['Cmu']}; kappa {f['kappa']}; boundNut true; value uniform 0; }}
     top    {{ type calculated; value uniform 0; }}
     {sym}""")
 

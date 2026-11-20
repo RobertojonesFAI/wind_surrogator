@@ -61,8 +61,51 @@ def cmd_run(args):
 
 
 def cmd_status(args):
-    from .runner import status_summary
-    print(json.dumps(status_summary(_cfg(args)), indent=1))
+    from .runner import failure_summary, status_summary
+    cfg = _cfg(args)
+    print(json.dumps(status_summary(cfg, by=args.by), indent=1))
+    if args.failures:
+        print(json.dumps(failure_summary(cfg, args.failures), indent=1))
+
+
+def cmd_global_check(args):
+    from .sources import check_sources
+    res = check_sources(_cfg(args))
+    bad = [r["source"] for r in res if not r["ok"]]
+    print("all sources reachable" if not bad else f"not reachable: {', '.join(bad)}")
+
+
+def cmd_global_descriptors(args):
+    from .descriptors import compute, merge
+    cfg = _cfg(args)
+    cfg.root.mkdir(parents=True, exist_ok=True)
+    if args.merge_only:
+        merge(cfg)
+    else:
+        compute(cfg, threads=args.threads, limit=args.limit)
+
+
+def cmd_global_sample(args):
+    from .globalsample import run_sampling
+    cfg = _cfg(args)
+    cfg.root.mkdir(parents=True, exist_ok=True)
+    save_config(cfg, cfg.root / "config_used.yaml")
+    run_sampling(cfg, resample=args.resample)
+
+
+def cmd_global_fetch(args):
+    from .crops import fetch
+    cfg = _cfg(args)
+    fetch(cfg, shard=args.shard, n_shards=args.num_shards, threads=args.threads, limit=args.limit,
+          pilot_only=args.pilot_only, clean_cache=args.clean_cache)
+
+
+def cmd_reorder(args):
+    from .runner import reorder_pending
+    cfg = _cfg(args)
+    with open(args.weights) as f:
+        weights = json.load(f)
+    print(json.dumps(reorder_pending(cfg, weights, key=args.key, seed=args.seed), indent=1))
 
 
 def cmd_train(args):
@@ -97,7 +140,8 @@ def cmd_plot(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="windsurrogate")
-    ap.add_argument("--config", default=None, help="YAML file merged over config/default.yaml")
+    ap.add_argument("--config", action="append", default=None,
+                    help="YAML file merged over config/default.yaml (repeatable, merged in order)")
     ap.add_argument("--set", action="append", default=[], help="override, e.g. --set geometry.dx=60")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -115,7 +159,37 @@ def main(argv=None):
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("status", help="dataset progress")
+    p.add_argument("--by", default=None, help="breakdown by a case field, e.g. stratum, group, region")
+    p.add_argument("--failures", type=int, default=0, help="also list the N most common errors")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("global-check", help="probe the data sources (Copernicus, WorldCover, FABDEM)")
+    p.set_defaults(func=cmd_global_check)
+
+    p = sub.add_parser("global-descriptors", help="terrain statistics on a worldwide ~10 km grid (GLO-90)")
+    p.add_argument("--threads", type=int, default=None)
+    p.add_argument("--limit", type=int, default=None, help="only this many tiles (testing)")
+    p.add_argument("--merge-only", action="store_true", help="only merge the per-tile files")
+    p.set_defaults(func=cmd_global_descriptors)
+
+    p = sub.add_parser("global-sample", help="stratified worldwide locations and case queue")
+    p.add_argument("--resample", action="store_true", help="overwrite an existing case list")
+    p.set_defaults(func=cmd_global_sample)
+
+    p = sub.add_parser("global-fetch", help="terrain + land cover crop for every location (resumable)")
+    p.add_argument("--shard", type=int, default=0)
+    p.add_argument("--num-shards", type=int, default=1)
+    p.add_argument("--threads", type=int, default=None)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--pilot-only", action="store_true", help="only the locations of pilot cases")
+    p.add_argument("--clean-cache", action="store_true", help="delete the FABDEM tile cache when done")
+    p.set_defaults(func=cmd_global_fetch)
+
+    p = sub.add_parser("reorder", help="re-prioritise pending cases with weights per group (no running jobs!)")
+    p.add_argument("--weights", required=True, help='JSON file, e.g. {"r4": 2.0, "hard": 3.0}')
+    p.add_argument("--key", default="stratum", help="case field the weights refer to")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_reorder)
 
     p = sub.add_parser("train", help="train the U-Net surrogate")
     p.add_argument("--fresh", action="store_true")

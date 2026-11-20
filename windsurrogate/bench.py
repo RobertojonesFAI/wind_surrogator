@@ -42,9 +42,14 @@ def bench(cfg, copies=(1, 24, 48), iters: int = 30, modes=("pin", "nopin"), case
     make_topology(cfg, geom, topo, env)
 
     case = read_cases(cfg.path(cfg["output"]["cases_file"]))[case_index]
-    regs = regions(cfg)
-    dem = MasterDEM.open(region_dem_path(cfg, case.get("region", regs[0]["name"])))
-    terrain = case_terrain(geom, dem, case["center_e"], case["center_n"], case["theta"])
+    if case.get("terrain"):
+        from .crops import load_crop, z0_lookup
+        dem = load_crop(cfg.root / case["terrain"], z0_lookup(cfg))
+    else:
+        regs = regions(cfg)
+        dem = MasterDEM.open(region_dem_path(cfg, case.get("region", regs[0]["name"])))
+    terrain = case_terrain(geom, dem, case["center_e"], case["center_n"], case["theta"],
+                           z0=case.get("z0"), z0_scale=float(case.get("z0_scale", 1.0)))
     template = base / "template"
     write_case(cfg, geom, terrain, case, template, topo)
     run(["checkMesh", "-constant", "-noTopology"], template, env, template / "log.checkMesh")

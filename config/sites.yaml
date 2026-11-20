@@ -1,0 +1,90 @@
+# Targeted sites for the global dataset: flying sites, places with well-known terrain
+# winds, validation campaigns and the original Idaho regions.
+#
+# Coordinates are approximate (a few km); cases are spread uniformly over a disc of
+# radius_km around each point, so the exact centre does not matter.
+#   weight   relative share of the site cases (default 1)
+#   split    train (default) | val | test. Val/test sites are held out completely: no
+#            global case is placed within radius_km + split buffer of them.
+#   kind     flying | wind | benchmark | mountain | home (only for bookkeeping)
+defaults:
+  radius_km: 20
+  weight: 1.0
+  split: train
+
+sites:
+  # ---- North America -------------------------------------------------------------
+  - {name: idaho_cervidae,        lat: 43.614, lon: -115.974, kind: home, weight: 2}
+  - {name: idaho_lost_river,      lat: 44.138, lon: -113.781, kind: home, weight: 2}
+  - {name: big_southern_butte,    lat: 43.396, lon: -113.022, kind: benchmark, split: test, radius_km: 12}
+  - {name: sun_valley,            lat: 43.660, lon: -114.400, kind: flying}
+  - {name: owens_valley,          lat: 37.360, lon: -118.400, kind: wind, split: test, radius_km: 25}
+  - {name: boulder_front_range,   lat: 40.020, lon: -105.300, kind: wind}
+  - {name: santa_ynez_sundowner,  lat: 34.500, lon: -119.850, kind: wind}
+  - {name: columbia_gorge,        lat: 45.700, lon: -121.500, kind: wind}
+  - {name: cajon_pass,            lat: 34.320, lon: -117.450, kind: wind}
+  - {name: point_of_the_mountain, lat: 40.460, lon: -111.900, kind: flying}
+  - {name: chelan_butte,          lat: 47.820, lon: -120.050, kind: flying, split: val}
+  - {name: jackson_hole,          lat: 43.590, lon: -110.830, kind: flying}
+  - {name: telluride,             lat: 37.940, lon: -107.810, kind: flying}
+  - {name: torrey_pines,          lat: 32.890, lon: -117.250, kind: flying, radius_km: 12}
+  - {name: pincher_creek_chinook, lat: 49.500, lon: -114.000, kind: wind}
+  - {name: golden_bc,             lat: 51.300, lon: -116.970, kind: flying}
+  - {name: valle_de_bravo,        lat: 19.200, lon: -100.130, kind: flying, split: test, weight: 2}
+  - {name: tapalpa,               lat: 19.950, lon: -103.760, kind: flying}
+  - {name: pico_de_orizaba,       lat: 19.030, lon: -97.270, kind: mountain}
+  - {name: tehuantepec_gap,       lat: 16.550, lon: -94.950, kind: wind, radius_km: 30}
+  - {name: monterrey_sierra_madre, lat: 25.600, lon: -100.350, kind: mountain}
+  - {name: haleakala,             lat: 20.710, lon: -156.250, kind: mountain}
+  - {name: makapuu,               lat: 21.310, lon: -157.660, kind: flying, radius_km: 12}
+  # ---- South America -------------------------------------------------------------
+  - {name: roldanillo,            lat: 4.410,   lon: -76.150, kind: flying}
+  - {name: mendoza_zonda,         lat: -32.900, lon: -69.100, kind: wind, radius_km: 30}
+  - {name: iquique,               lat: -20.270, lon: -70.100, kind: flying, radius_km: 15}
+  - {name: governador_valadares,  lat: -18.850, lon: -41.950, kind: flying}
+  - {name: bariloche,             lat: -41.130, lon: -71.400, kind: mountain}
+  - {name: sacred_valley_cusco,   lat: -13.330, lon: -72.080, kind: mountain}
+  # ---- Europe --------------------------------------------------------------------
+  - {name: annecy_forclaz,        lat: 45.810, lon: 6.250,  kind: flying}
+  - {name: chamonix,              lat: 45.920, lon: 6.870,  kind: flying}
+  - {name: interlaken,            lat: 46.680, lon: 7.860,  kind: flying}
+  - {name: bassano,               lat: 45.800, lon: 11.730, kind: flying}
+  - {name: tolmin_kobala,         lat: 46.180, lon: 13.730, kind: flying, split: test}
+  - {name: greifenburg,           lat: 46.750, lon: 13.180, kind: flying}
+  - {name: zillertal,             lat: 47.150, lon: 11.870, kind: flying}
+  - {name: gourdon,               lat: 43.720, lon: 6.980,  kind: flying}
+  - {name: laragne,               lat: 44.320, lon: 5.820,  kind: flying}
+  - {name: st_hilaire,            lat: 45.310, lon: 5.890,  kind: flying}
+  - {name: altdorf_foehn,         lat: 46.880, lon: 8.640,  kind: wind}
+  - {name: rhone_mistral,         lat: 44.100, lon: 4.800,  kind: wind}
+  - {name: velebit_bora,          lat: 44.990, lon: 14.900, kind: wind}
+  - {name: ager,                  lat: 42.030, lon: 0.750,  kind: flying}
+  - {name: organya,               lat: 42.210, lon: 1.330,  kind: flying}
+  - {name: algodonales,           lat: 36.880, lon: -5.400, kind: flying}
+  - {name: serra_da_estrela,      lat: 40.320, lon: -7.610, kind: mountain}
+  - {name: voss,                  lat: 60.630, lon: 6.420,  kind: flying}
+  - {name: scottish_highlands,    lat: 56.800, lon: -5.000, kind: mountain}
+  - {name: oludeniz_babadag,      lat: 36.540, lon: 29.160, kind: flying}
+  - {name: gudauri,               lat: 42.470, lon: 44.480, kind: flying}
+  - {name: carpathians_brasov,    lat: 45.600, lon: 25.450, kind: mountain}
+  # ---- Asia ----------------------------------------------------------------------
+  - {name: bir_billing,           lat: 32.050, lon: 76.720,  kind: flying, split: test}
+  - {name: pokhara,               lat: 28.240, lon: 83.950,  kind: flying}
+  - {name: khumbu,                lat: 27.980, lon: 86.920,  kind: mountain}
+  - {name: hunza_karakoram,       lat: 36.320, lon: 74.650,  kind: mountain}
+  - {name: almaty_tian_shan,      lat: 43.100, lon: 77.050,  kind: mountain}
+  - {name: danyang,               lat: 36.980, lon: 128.370, kind: flying}
+  - {name: hakuba,                lat: 36.700, lon: 137.830, kind: flying}
+  - {name: asagiri_fuji,          lat: 35.410, lon: 138.570, kind: flying}
+  # ---- Africa --------------------------------------------------------------------
+  - {name: high_atlas_imlil,      lat: 31.130,  lon: -7.920, kind: mountain}
+  - {name: drakensberg_bulwer,    lat: -29.810, lon: 29.770, kind: flying, split: val}
+  - {name: dasklip_porterville,   lat: -32.860, lon: 18.980, kind: flying}
+  - {name: cape_town_table_mtn,   lat: -33.950, lon: 18.400, kind: wind, radius_km: 15}
+  - {name: kerio_valley,          lat: 0.670,   lon: 35.520, kind: flying}
+  - {name: tenerife,              lat: 28.270,  lon: -16.640, kind: mountain}
+  # ---- Oceania -------------------------------------------------------------------
+  - {name: queenstown,            lat: -44.930, lon: 168.730, kind: flying, split: test}
+  - {name: aoraki_mt_cook,        lat: -43.600, lon: 170.100, kind: mountain}
+  - {name: manilla_mt_borah,      lat: -30.710, lon: 150.660, kind: flying}
+  - {name: bright,                lat: -36.730, lon: 146.960, kind: flying}
