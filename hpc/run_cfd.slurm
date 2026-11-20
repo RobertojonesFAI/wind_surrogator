@@ -85,14 +85,16 @@ echo "node $(hostname)  shard $SHARD/$NUM_SHARDS  cores $CONCURRENT  stop after 
 free -g | head -2
 df -h "$WORK" | tail -1
 
-CONFIG_ARGS=(--config hpc/cluster.yaml)
-if [ -n "${EXTRA_CONFIG:-}" ]; then CONFIG_ARGS+=(--config "$EXTRA_CONFIG"); fi
-LIMIT_ARGS=()
-if [ -n "${LIMIT:-}" ]; then LIMIT_ARGS=(--limit "$LIMIT"); fi
+# Plain strings, not arrays: with `set -u`, bash < 4.4 (older compute-node OS) treats an
+# empty array as unbound.
+EXTRA_ARGS=""
+if [ -n "${EXTRA_CONFIG:-}" ]; then EXTRA_ARGS="--config $EXTRA_CONFIG"; fi
+LIMIT_ARGS=""
+if [ -n "${LIMIT:-}" ]; then LIMIT_ARGS="--limit $LIMIT"; fi
 
-python -m windsurrogate "${CONFIG_ARGS[@]}" \
+# shellcheck disable=SC2086
+python -m windsurrogate --config hpc/cluster.yaml $EXTRA_ARGS \
   --set "project_dir=$PROJECT" --set "output.work_dir=$WORK" \
-  run --shard "$SHARD" --num-shards "$NUM_SHARDS" --concurrent "$CONCURRENT" --hours "$STOP_HOURS" \
-  "${LIMIT_ARGS[@]}"
+  run --shard "$SHARD" --num-shards "$NUM_SHARDS" --concurrent "$CONCURRENT" --hours "$STOP_HOURS" $LIMIT_ARGS
 
 rm -rf "$WORK"
