@@ -185,6 +185,16 @@ def terrain_ready(cfg, case: dict) -> bool:
 
 def pending_cases(cfg, shard: int = 0, n_shards: int = 1, max_attempts: int = 2,
                   verbose: bool = False) -> list[dict]:
+    todo, waiting = pending_and_waiting(cfg, shard, n_shards, max_attempts)
+    if verbose and waiting:
+        print(f"[shard {shard}/{n_shards}] {waiting} cases wait for their terrain crop (run global-fetch)",
+              flush=True)
+    return todo
+
+
+def pending_and_waiting(cfg, shard: int = 0, n_shards: int = 1,
+                        max_attempts: int = 2) -> tuple[list[dict], int]:
+    """(cases of this shard ready to run, number of cases still waiting for a terrain crop)."""
     cases = read_cases(cfg.path(cfg["output"]["cases_file"]))
     done, status = _listing(cfg)
     todo, waiting = [], 0
@@ -201,10 +211,7 @@ def pending_cases(cfg, shard: int = 0, n_shards: int = 1, max_attempts: int = 2,
             waiting += 1
             continue
         todo.append(c)
-    if verbose and waiting:
-        print(f"[shard {shard}/{n_shards}] {waiting} cases wait for their terrain crop (run global-fetch)",
-              flush=True)
-    return todo
+    return todo, waiting
 
 
 def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None,
@@ -232,19 +239,24 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
     topo_dir = work / "_topology"
     meta = make_topology(cfg, geom, topo_dir, env)
     print(f"[topology] {geom.summary()} -> {meta}", flush=True)
+    from collections import deque
+    from concurrent.futures import FIRST_COMPLETED, wait
+
     from .crops import CropCache
     from .dem import region_dem_path, regions
-    todo = pending_cases(cfg, shard, n_shards, verbose=True)
-    regional = [c for c in todo if not c.get("terrain")]
-    regs = regions(cfg) if regional else []
-    needed = {c.get("region", regs[0]["name"]) for c in regional}
-    dems = {name: MasterDEM.open(region_dem_path(cfg, name)) for name in sorted(needed)}
     crops = CropCache(cfg)
+    dems: dict[str, MasterDEM] = {}
+    dem_lock = threading.Lock()
 
     def dem_for(c):
-        return crops(c["terrain"]) if c.get("terrain") else dems[c.get("region", regs[0]["name"])]
-    if limit:
-        todo = todo[:limit]
+        if c.get("terrain"):
+            return crops(c["terrain"])
+        with dem_lock:
+            name = c.get("region") or regions(cfg)[0]["name"]
+            if name not in dems:
+                dems[name] = MasterDEM.open(region_dem_path(cfg, name))
+            return dems[name]
+
     concurrent = int(concurrent or cfg["solver"]["concurrent_cases"])
     from . import affinity
     slots = None
@@ -253,10 +265,8 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
         for slot in affinity.core_slots()[:concurrent]:
             slots.put(slot)
         print(f"[worker {shard}/{n_shards}] pinning each case to one core: {affinity.describe()}", flush=True)
-    print(f"[worker {shard}/{n_shards}] {len(todo)} pending cases, {concurrent} at a time", flush=True)
     deadline = time.time() + stop_after_hours * 3600 if stop_after_hours else None
-    lock = threading.Lock()
-    stats = dict(done=0, failed=0, secs=[])
+    stats = dict(done=0, failed=0)
     t_start = time.time()
 
     def job(c):
@@ -271,24 +281,54 @@ def worker(cfg, shard: int = 0, n_shards: int = 1, concurrent: int | None = None
         finally:
             slots.put((cpu, node))
 
+    # The case list is re-read whenever this worker runs out of cases (at most every
+    # refresh_minutes), so cases whose terrain crop appears later (global-fetch running in
+    # parallel) are picked up without restarting the job.
+    refresh_s = float(cfg["solver"].get("refresh_minutes", 5)) * 60
+    attempted: set[str] = set()
+    backlog: deque = deque()
+    state = dict(waiting=0, last=0.0)
+
+    def refresh():
+        todo, waiting = pending_and_waiting(cfg, shard, n_shards)
+        backlog.clear()
+        backlog.extend(c for c in todo if c["case_id"] not in attempted)
+        state.update(waiting=waiting, last=time.time())
+        print(f"[worker {shard}/{n_shards}] {len(backlog)} pending cases, {waiting} waiting for terrain, "
+              f"{concurrent} at a time", flush=True)
+
+    refresh()
+    started = 0
     with ThreadPoolExecutor(max_workers=concurrent) as ex:
-        futs = {ex.submit(job, c): c for c in todo}
-        for fut in as_completed(futs):
-            info = fut.result()
-            if info is None:
+        inflight = set()
+        while True:
+            stop_new = bool((deadline and time.time() > deadline) or (limit and started >= limit))
+            while not stop_new and backlog and len(inflight) < concurrent:
+                c = backlog.popleft()
+                attempted.add(c["case_id"])
+                started += 1
+                inflight.add(ex.submit(job, c))
+                stop_new = bool(limit and started >= limit)
+            if not stop_new and not backlog and time.time() - state["last"] > refresh_s:
+                refresh()
                 continue
-            with lock:
-                if info["status"] == "done":
-                    stats["done"] += 1
-                    stats["secs"].append(info["wall_seconds"])
-                else:
-                    stats["failed"] += 1
+            if not inflight:
+                if stop_new or (not backlog and state["waiting"] == 0):
+                    break
+                time.sleep(min(60.0, refresh_s))
+                continue
+            finished, _ = wait(inflight, timeout=60, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                inflight.discard(fut)
+                info = fut.result()
+                if info is None:
+                    continue
+                stats["done" if info["status"] == "done" else "failed"] += 1
                 n_fin = stats["done"] + stats["failed"]
-                rate = n_fin / max(time.time() - t_start, 1.0)
-                eta = (len(todo) - n_fin) / rate / 3600 if rate > 0 else float("nan")
-                print(f"[{n_fin}/{len(todo)}] {info['case_id']} {info['status']:6s} "
+                rate = n_fin / max(time.time() - t_start, 1.0) * 3600
+                print(f"[{n_fin} | {len(backlog)} queued] {info['case_id']} {info['status']:6s} "
                       f"iters={info.get('iterations')} conv={info.get('converged')} "
-                      f"t={info.get('wall_seconds')}s  ETA {eta:.1f} h"
+                      f"t={info.get('wall_seconds')}s  {rate:.0f} cases/h"
                       + (f"  ERR {info.get('error', '')[:200]}" if info["status"] != "done" else ""),
                       flush=True)
     print(f"[worker {shard}] finished: {stats['done']} done, {stats['failed']} failed", flush=True)

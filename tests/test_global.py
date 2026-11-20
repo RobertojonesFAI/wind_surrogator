@@ -114,8 +114,9 @@ def test_range_zip(tmp_path, monkeypatch):
                         fake_http({f"{base}/N40W120-N50W110_FABDEM_V1-2.zip": zbuf.getvalue()}))
     fab = sources.FabdemTiles(tmp_path / "cache", order=["bris"], base_url=base)
     assert fab.get(43, -116).read_bytes() == b"tile-bytes"
-    assert fab.get(44, -116) is None
-    assert fab.get(-30, 20) is None
+    assert fab.get(44, -116) is None                 # zip exists, tile does not: ocean
+    with pytest.raises(RuntimeError):                # missing zip: an error, not ocean
+        fab.get(-30, 20)
 
 
 # --------------------------------------------------------------------------- crops
@@ -287,3 +288,46 @@ def test_queue_waiting_and_reorder(tmp_path):
     assert new[0]["case_id"] == "g000001"                       # finished stays in front
     assert all(c["stratum"] == "hard" for c in new[1:11])       # then the heavy group
     assert sorted(c["case_id"] for c in new) == sorted(c["case_id"] for c in cases)
+
+
+def test_worker_picks_up_late_terrain(tmp_path, monkeypatch):
+    """Cases whose crop appears while the worker runs are processed without a restart."""
+    import threading
+    import time as _time
+
+    import windsurrogate.crops as crops_mod
+    from windsurrogate import runner
+    from windsurrogate.sampling import write_cases
+    cfg = load_config(overrides=[f"project_dir={tmp_path}", f"output.work_dir={tmp_path / 'work'}",
+                                 "solver.refresh_minutes=0.01", "solver.pin_cores=false"])
+    cases = [dict(case_id=f"g{i:06d}", split="train", stratum="r1", terrain=f"terrain/L{i:06d}.npz",
+                  center_e=0.0, center_n=0.0, theta=0.0) for i in range(6)]
+    write_cases(cfg.path("cases.jsonl"), cases)
+    (tmp_path / "terrain").mkdir()
+
+    def make(i):
+        (tmp_path / "terrain" / f"L{i:06d}.npz").write_bytes(b"x")
+    for i in range(2):
+        make(i)
+
+    def fake_run_case(cfg_, geom, dem, case, topo, env, prefix=""):
+        out = runner.sample_path(cfg_, case)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return dict(case, status="done", wall_seconds=0.1)
+
+    monkeypatch.setattr(runner, "foam_env", lambda a: {})
+    monkeypatch.setattr(runner, "make_topology", lambda *a, **k: {})
+    monkeypatch.setattr(runner, "run_case", fake_run_case)
+    monkeypatch.setattr(crops_mod, "CropCache", lambda cfg_: (lambda rel: None))
+
+    def later():
+        _time.sleep(1.5)
+        for i in range(2, 6):
+            make(i)
+    th = threading.Thread(target=later)
+    th.start()
+    runner.worker(cfg, concurrent=2)
+    th.join()
+    done = sorted(p.stem for p in (tmp_path / "dataset" / "train").glob("*.npz"))
+    assert done == [c["case_id"] for c in cases]

@@ -350,7 +350,7 @@ class FabdemTiles:
         if src in ("bris", "bris_full"):
             zname = fabdem_zip_name(lat, lon)
             if zname in self._missing_zips:
-                return None
+                raise FileNotFoundError(zname)
             if src == "bris" and self._no_range:
                 raise OSError("range requests refused earlier")
             with self._zip_lock(zname):
@@ -361,8 +361,11 @@ class FabdemTiles:
                                                   allow_full_download=(src == "bris_full"),
                                                   scratch=self.scratch)
                 except FileNotFoundError:
-                    self._missing_zips.add(zname)       # whole 10-degree box is ocean
-                    return None
+                    # Either an all-ocean 10-degree box or a wrong zip name: not proof of
+                    # ocean, so let the caller fall back to Copernicus (whose missing tiles
+                    # are ocean).
+                    self._missing_zips.add(zname)
+                    raise
                 except OSError as e:
                     if "range" in str(e):
                         self._no_range = True
@@ -372,7 +375,10 @@ class FabdemTiles:
             if not self.mirror_template:
                 raise ValueError("no mirror template configured")
             url = self.mirror_template.format(name=name, zip=fabdem_zip_name(lat, lon)[:-4])
-            return download(url, self.path(lat, lon))
+            got = download(url, self.path(lat, lon))
+            if got is None:            # a mirror miss says nothing about the ocean
+                raise FileNotFoundError(url)
+            return got
         raise ValueError(f"unknown FABDEM source {src!r}")
 
 

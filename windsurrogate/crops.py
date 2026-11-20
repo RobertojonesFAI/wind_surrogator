@@ -96,7 +96,7 @@ def _inside_any(lat: np.ndarray, lon: np.ndarray, tiles) -> np.ndarray:
 
 def build_crop(lat: float, lon: float, half: float, res: float, dem_source: str,
                fabdem: FabdemTiles | None = None, fallback_copernicus: bool = True,
-               landcover: bool = True) -> dict:
+               landcover: bool = True, max_sea_frac: float = 0.9) -> dict:
     """Elevation and land cover around (lat, lon) on the local grid."""
     from rasterio.enums import Resampling
     from rasterio.fill import fillnodata
@@ -153,6 +153,9 @@ def build_crop(lat: float, lon: float, half: float, res: float, dem_source: str,
                              max_search_distance=100)
             dem[~np.isfinite(dem)] = 0.0
         lc[(lc == 0) & sea] = WATER_CLASS
+    if fill_frac > max_sea_frac:
+        raise RuntimeError(f"{fill_frac:.0%} of the crop has no elevation (sources used: {sorted(used)}); "
+                           "locations are on land, so this points to a data source problem")
     off = math.floor(float(np.min(dem)))
     q = np.round((dem - off) / DEM_SCALE)
     if q.max() > 65535:

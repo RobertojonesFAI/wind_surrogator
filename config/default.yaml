@@ -69,6 +69,7 @@ solver:
   pin_cores: auto                      # pin each serial case to one physical core + its NUMA memory (auto: when enough cores)
   non_orth_correctors: auto            # auto: 1 if checkMesh non-orthogonality > 50 deg, else 0
   timeout_hours: 6
+  refresh_minutes: 5                   # re-read the case list this often when a worker runs out of cases
   activate: >-
     eval "$(micromamba shell hook -s bash)" && micromamba activate foam
   keep_failed_cases: false
@@ -145,7 +146,9 @@ global:
     dir: terrain                       # crops: terrain/<L0001>/<L000123>.npz
     locations_file: locations.jsonl
     dem_source: fabdem                 # fabdem | copernicus30
-    fabdem_order: [bris, mirror, bris_full]
+    # bris: tiles read out of the Bristol zips with range requests; mirror: per-tile copy;
+    # bris_full: download whole 10-degree zips (3-4 GB each; only add it on purpose).
+    fabdem_order: [bris, mirror]
     fabdem_mirror: "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles/{zip}/{name}"
     fallback_copernicus: true          # tiles no FABDEM source can deliver come from GLO-30
     tile_cache: dem_tiles/fabdem
