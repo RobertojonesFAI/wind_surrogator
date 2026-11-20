@@ -90,7 +90,24 @@ def summarise(z: np.ndarray, lat0: int, lon0: int, cells_per_deg: int = 10) -> d
                           else np.float64) for k, v in out.items()}
 
 
-def read_tile(lat: int, lon: int, decimate: int = 4) -> np.ndarray | None:
+TRANSIENT = ("Could not resolve host", "Timeout", "timed out", "Connection reset", "Couldn't connect",
+             "SSL", "500", "502", "503", "504", "429")
+
+
+def read_tile(lat: int, lon: int, decimate: int = 4, retries: int = 6) -> np.ndarray | None:
+    """read_tile_once with retries (with backoff) on transient network errors such as DNS
+    failures, which appear when many threads open connections at once."""
+    import random
+    for attempt in range(retries):
+        try:
+            return read_tile_once(lat, lon, decimate)
+        except Exception as e:  # noqa: BLE001
+            if attempt == retries - 1 or not any(t in str(e) for t in TRANSIENT):
+                raise
+            time.sleep(min(60.0, 2.0 ** attempt) + random.uniform(0, 2))
+
+
+def read_tile_once(lat: int, lon: int, decimate: int = 4) -> np.ndarray | None:
     """GLO-90 tile at reduced resolution (uses the COG overviews). None if it does not exist."""
     import rasterio
     from rasterio.enums import Resampling
@@ -158,6 +175,9 @@ def compute(cfg, threads: int | None = None, limit: int | None = None, tiles=Non
         print(f"  error {t}: {e}")
     if errors:
         print(f"{len(errors)} tiles failed; run the command again to retry them")
+    if len(errors) > max(5, 0.01 * len(todo)):
+        # Exit with an error so jobs that depend on this one (afterok) do not start.
+        raise SystemExit(f"too many failed tiles ({len(errors)} of {len(todo)}); not merging")
     return merge(cfg)
 
 

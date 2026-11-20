@@ -249,8 +249,17 @@ def fetch(cfg, shard: int = 0, n_shards: int = 1, threads: int | None = None,
     t0 = time.time()
 
     def job(loc):
-        crop = build_crop(loc["lat"], loc["lon"], half, res, src, fab,
-                          fallback_copernicus=bool(t.get("fallback_copernicus", True)))
+        import random
+        from .descriptors import TRANSIENT
+        for attempt in range(5):
+            try:
+                crop = build_crop(loc["lat"], loc["lon"], half, res, src, fab,
+                                  fallback_copernicus=bool(t.get("fallback_copernicus", True)))
+                break
+            except Exception as e:  # noqa: BLE001
+                if attempt == 4 or not any(s in str(e) for s in TRANSIENT):
+                    raise
+                time.sleep(min(60.0, 2.0 ** attempt) + random.uniform(0, 2))
         save_crop(cfg.root / loc["terrain"], crop)
         return str(crop["dem_source"])
 

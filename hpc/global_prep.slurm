@@ -28,7 +28,8 @@ PROJECT="${PROJECT:?set PROJECT to the global project folder}"
 STEP="${STEP:?set STEP to descriptors, sample, pilot-fetch or fetch}"
 NUM_SHARDS="${NUM_SHARDS:-1}"
 SHARD="${SLURM_ARRAY_TASK_ID:-0}"
-THREADS="${THREADS:-${SLURM_CPUS_PER_TASK:-16}}"
+# Network-bound: too many threads overwhelm the node's DNS resolver ("Could not resolve host").
+THREADS="${THREADS:-12}"
 
 export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/mamba}"
 eval "$("$HOME/bin/micromamba" shell hook -s bash)"
