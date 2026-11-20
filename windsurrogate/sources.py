@@ -353,7 +353,7 @@ class FabdemTiles:
                 raise FileNotFoundError(zname)
             if src == "bris" and self._no_range:
                 raise OSError("range requests refused earlier")
-            with self._zip_lock(zname):
+            with self._zip_lock(name):          # one lock per tile: tiles of a zip download in parallel
                 if self.path(lat, lon).exists():
                     return self.path(lat, lon)
                 try:
