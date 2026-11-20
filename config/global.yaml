@@ -10,6 +10,11 @@ project_dir: ./runs/global
 output:
   float16: true
 
+solver:
+  # 0.5 % of Uref over 200 iterations instead of 0.2 %: steep cases settle 100-300
+  # iterations earlier; the remaining change is far below the surrogate error (~8 % of Uref).
+  conv_tol: 5.0e-3
+
 global:
   sampling:
     n_cases: 200000
