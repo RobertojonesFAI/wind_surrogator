@@ -69,6 +69,7 @@ solver:
   pin_cores: auto                      # pin each serial case to one physical core + its NUMA memory (auto: when enough cores)
   non_orth_correctors: auto            # auto: 1 if checkMesh non-orthogonality > 50 deg, else 0
   timeout_hours: 6
+  safe_retry: true                     # rerun a diverged case once with conservative settings
   refresh_minutes: 5                   # re-read the case list this often when a worker runs out of cases
   activate: >-
     eval "$(micromamba shell hook -s bash)" && micromamba activate foam

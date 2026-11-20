@@ -233,8 +233,28 @@ def _turbulence_properties(cfg) -> tuple[str, str]:
     return model, body
 
 
-def _fv_schemes(model: str) -> str:
+def _fv_schemes(model: str, safe: bool = False) -> str:
     turb = "div(phi,omega) $turbulence;" if model == "kOmegaSST" else "div(phi,epsilon) $turbulence;"
+    if safe:
+        # Fallback for cases that diverge (very steep terrain): TVD-limited momentum
+        # convection, upwind turbulence, limited gradients, stronger non-orthogonal limiting.
+        return f"""
+ddtSchemes {{ default steadyState; }}
+gradSchemes {{ default cellLimited Gauss linear 1; }}
+divSchemes
+{{
+    default         none;
+    div(phi,U)      bounded Gauss limitedLinearV 1;
+    turbulence      bounded Gauss upwind;
+    div(phi,k)      $turbulence;
+    {turb}
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}}
+laplacianSchemes {{ default Gauss linear limited corrected 0.33; }}
+interpolationSchemes {{ default linear; }}
+snGradSchemes {{ default limited corrected 0.33; }}
+wallDist {{ method meshWave; }}
+"""
     return f"""
 ddtSchemes {{ default steadyState; }}
 gradSchemes
@@ -258,9 +278,32 @@ wallDist {{ method meshWave; }}
 """
 
 
-def _fv_solution(cfg, model: str, n_corr: int = 0) -> str:
+def _fv_solution(cfg, model: str, n_corr: int = 0, safe: bool = False) -> str:
     s = cfg["solver"]
     t = "omega" if model == "kOmegaSST" else "epsilon"
+    if safe:
+        # SIMPLE (not SIMPLEC) with explicit pressure relaxation and lower momentum and
+        # turbulence relaxation: slower, but stable on steep lee slopes.
+        algo = "consistent      false;"
+        relax = """relaxationFactors
+{
+    fields { p 0.3; }
+    equations
+    {
+        U               0.5;
+        "(k|epsilon|omega)" 0.4;
+    }
+}"""
+    else:
+        algo = "consistent      true;"
+        relax = """relaxationFactors
+{
+    equations
+    {
+        U               0.8;
+        "(k|epsilon|omega)" 0.6;
+    }
+}"""
     return f"""
 solvers
 {{
@@ -282,7 +325,7 @@ solvers
 SIMPLE
 {{
     nNonOrthogonalCorrectors {n_corr};
-    consistent      true;
+    {algo}
     // Convergence is decided from probes by the Python runner; this is only a
     // last-resort early exit for trivially converged (e.g. flat) cases.
     residualControl
@@ -292,14 +335,7 @@ SIMPLE
         "(k|{t})"       {s['residual_turb']};
     }}
 }}
-relaxationFactors
-{{
-    equations
-    {{
-        U               0.8;
-        "(k|epsilon|omega)" 0.6;
-    }}
-}}
+{relax}
 cache {{ grad(U); }}
 """
 
@@ -311,7 +347,7 @@ def _abl_entries(cfg, z0: float) -> str:
 
 
 def write_case(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case_dir: Path,
-               topo_dir: Path) -> None:
+               topo_dir: Path, safe: bool = False) -> None:
     f, s = cfg["flow"], cfg["solver"]
     z0 = case_z0(terrain, case)
     model, turb_body = _turbulence_properties(cfg)
@@ -338,9 +374,9 @@ def write_case(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case_d
                       control_dict("simpleFoam", s["max_iter"], s["max_iter"],
                                    functions=probes_function(probe_locations(geom, terrain),
                                                              avg_start=int(s.get("avg_start_iter", 1000)))))
-    foamio.write_dict(case_dir / "system/fvSchemes", "fvSchemes", _fv_schemes(model))
+    foamio.write_dict(case_dir / "system/fvSchemes", "fvSchemes", _fv_schemes(model, safe))
     nc = s.get("non_orth_correctors", "auto")
-    set_non_orth(cfg, case_dir, 0 if nc == "auto" else int(nc))
+    set_non_orth(cfg, case_dir, 0 if nc == "auto" else int(nc), safe)
     n = int(s["procs_per_case"])
     foamio.write_dict(case_dir / "system/decomposeParDict", "decomposeParDict",
                       f"numberOfSubdomains {n};\nmethod scotch;\n")
@@ -404,9 +440,9 @@ def write_case(cfg, geom: CaseGeometry, terrain: CaseTerrain, case: dict, case_d
     {sym}""")
 
 
-def set_non_orth(cfg, case_dir: Path, n_corr: int) -> None:
+def set_non_orth(cfg, case_dir: Path, n_corr: int, safe: bool = False) -> None:
     model = cfg["flow"]["turbulence_model"]
-    foamio.write_dict(case_dir / "system/fvSolution", "fvSolution", _fv_solution(cfg, model, n_corr))
+    foamio.write_dict(case_dir / "system/fvSolution", "fvSolution", _fv_solution(cfg, model, n_corr, safe))
 
 
 def cell_agl(geom: CaseGeometry, terrain: CaseTerrain) -> np.ndarray:

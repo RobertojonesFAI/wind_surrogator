@@ -97,6 +97,50 @@ def run_monitored(cmd: str, case_dir: Path, env: dict, cfg, timeout: float) -> b
     return stopped
 
 
+def _diverged(case_dir: Path, err: Exception) -> bool:
+    """Did the solver blow up (floating point exception, NaN fields)?"""
+    txt = str(err)
+    log = case_dir / "log.simpleFoam"
+    if log.exists():
+        txt += log.read_text(errors="replace")[-20000:]
+    if any(k in txt for k in ("sigFpe", "Floating point exception", "code -8", "non-finite")):
+        return True
+    return re.search(r"(?<![A-Za-z])-?nan(?![A-Za-z])", txt, flags=re.IGNORECASE) is not None
+
+
+def _solve(cfg, geom, terrain, case, case_dir: Path, topo_dir: Path, env, prefix, info: dict, safe: bool):
+    """Write, check and run one case; returns (stopped on convergence, sample dict)."""
+    s = cfg["solver"]
+    write_case(cfg, geom, terrain, case, case_dir, topo_dir, safe=safe)
+    run(["checkMesh", "-constant", "-noTopology"], case_dir, env, case_dir / "log.checkMesh")
+    info.update(parse_checkmesh(case_dir / "log.checkMesh"))
+    if s.get("non_orth_correctors", "auto") == "auto":
+        n_corr = 1 if info.get("max_non_orth", 0) > 50 else 0
+        if safe:
+            n_corr = 2 if info.get("max_non_orth", 0) > 50 else 1
+        set_non_orth(cfg, case_dir, n_corr, safe)
+        info["non_orth_correctors"] = n_corr
+    t1 = time.time()
+    nproc = int(s["procs_per_case"])
+    timeout = float(s.get("timeout_hours", 6)) * 3600
+    if nproc > 1:
+        run(["decomposePar", "-force"], case_dir, env, case_dir / "log.decomposePar")
+        stopped = run_monitored(f"mpirun -np {nproc} simpleFoam -parallel", case_dir, env, cfg, timeout)
+        run(["reconstructPar", "-latestTime"], case_dir, env, case_dir / "log.reconstructPar")
+    else:
+        stopped = run_monitored(f"{prefix}simpleFoam", case_dir, env, cfg, timeout)
+    info.update(parse_log(case_dir / "log.simpleFoam"))
+    conv = probe_convergence(case_dir, cfg["flow"]["Uref"], window=int(s.get("conv_window", 200)))
+    info.update(conv)
+    info["converged"] = bool(stopped) or conv.get("probe_max_change", 1.0) < float(s.get("conv_tol", 2e-3))
+    info["wall_seconds_solver"] = round(time.time() - t1, 1)
+    sample = build_sample(cfg, geom, terrain, case, case_dir, use_instant=info["converged"])
+    for k in ("U", "k"):
+        if not np.isfinite(sample[k].astype(np.float32)).all():
+            raise RuntimeError(f"non-finite values in {k}: the solution diverged")
+    return stopped, sample
+
+
 def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path, env: dict,
              prefix: str = "") -> dict:
     """Run one case. `prefix` is prepended to the solver command (e.g. core pinning)."""
@@ -112,28 +156,20 @@ def run_case(cfg, geom: CaseGeometry, dem: MasterDEM, case: dict, topo_dir: Path
                                z0=case.get("z0"), z0_scale=float(case.get("z0_scale", 1.0)))
         info.update(base=terrain.base, top=terrain.top, max_slope_deg=terrain.max_slope_deg,
                     z0=case_z0(terrain, case))
-        write_case(cfg, geom, terrain, case, case_dir, topo_dir)
-        run(["checkMesh", "-constant", "-noTopology"], case_dir, env, case_dir / "log.checkMesh")
-        info.update(parse_checkmesh(case_dir / "log.checkMesh"))
-        if s.get("non_orth_correctors", "auto") == "auto":
-            n_corr = 1 if info.get("max_non_orth", 0) > 50 else 0
-            set_non_orth(cfg, case_dir, n_corr)
-            info["non_orth_correctors"] = n_corr
-        t1 = time.time()
-        nproc = int(s["procs_per_case"])
-        timeout = float(s.get("timeout_hours", 6)) * 3600
-        if nproc > 1:
-            run(["decomposePar", "-force"], case_dir, env, case_dir / "log.decomposePar")
-            stopped = run_monitored(f"mpirun -np {nproc} simpleFoam -parallel", case_dir, env, cfg, timeout)
-            run(["reconstructPar", "-latestTime"], case_dir, env, case_dir / "log.reconstructPar")
-        else:
-            stopped = run_monitored(f"{prefix}simpleFoam", case_dir, env, cfg, timeout)
-        info.update(parse_log(case_dir / "log.simpleFoam"))
-        conv = probe_convergence(case_dir, cfg["flow"]["Uref"], window=int(s.get("conv_window", 200)))
-        info.update(conv)
-        info["converged"] = bool(stopped) or conv.get("probe_max_change", 1.0) < float(s.get("conv_tol", 2e-3))
-        info["wall_seconds_solver"] = round(time.time() - t1, 1)
-        sample = build_sample(cfg, geom, terrain, case, case_dir, use_instant=info["converged"])
+        # First the normal settings; if the solver diverges (steep terrain), once more from
+        # scratch with conservative settings (solver.safe_retry).
+        modes = (False, True) if s.get("safe_retry", True) else (False,)
+        for safe in modes:
+            try:
+                stopped, sample = _solve(cfg, geom, terrain, case, case_dir, topo_dir, env, prefix, info, safe)
+                break
+            except RuntimeError as err:
+                if safe or len(modes) == 1 or not _diverged(case_dir, err):
+                    raise
+                info["diverged_first_try"] = True
+                info["first_try_iterations"] = parse_log(case_dir / "log.simpleFoam").get("iterations")
+                shutil.rmtree(case_dir, ignore_errors=True)
+        info["safe_mode"] = bool(info.get("diverged_first_try"))
         info["averaged"] = bool(sample["averaged"])
         meta = dict(info, status="done")
         meta["wall_seconds"] = round(time.time() - t0, 1)
