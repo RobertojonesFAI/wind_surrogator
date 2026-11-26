@@ -73,6 +73,27 @@ Each case writes ~1.4 MB, so 100,000 cases need ~140 GB. Running cases also need
 
 More cases of the same two regions add little once the terrain is well covered. A large allocation is better spent on new terrain (the worldwide dataset, [global.md](global.md)) or on the stratified v2 ([v2-stratified-design.md](v2-stratified-design.md)).
 
+## Training on a GPU node
+
+Training uses one GPU, so it needs one node. It reads a frozen snapshot of the dataset, so
+it can run while the CFD jobs keep adding cases, and a resumed run sees the same files.
+
+```bash
+bash hpc/setup_ml_env.sh                                        # once: env "ml" with PyTorch
+PROJECT=$PROJECT TAG=b1 sbatch -p short hpc/snapshot_dataset.sh  # $PROJECT/snapshots/b1/*.tar
+PROJECT=$PROJECT SNAPSHOT=b1 EXTRA_CONFIG=config/global.yaml \
+  sbatch -p gpu -t 2-00:00:00 hpc/train_gpu.slurm                # checkpoints/b1/last.pt, best.pt
+```
+
+- **Partitions.** Check the GPU partitions and their time limits with
+  `sinfo -o "%P %G %l %D"`. A GPU type can be requested with `--gres=gpu:<type>:1`.
+- **Time limit.** A checkpoint is written every epoch. Submit the same command again to
+  resume, or chain it with `--dependency=afterany:<jobid>`.
+- **Epochs.** `EPOCHS` defaults to 25; the config's 120 was set for ~1,200 cases.
+- **Backup / Colab.** The snapshot `.tar` files are the copy for Google Drive
+  (`rclone copy $PROJECT/snapshots/b1 gdrive:windsurrogate/global/snapshots/b1 -P`). On
+  Colab, copy them to local disk and extract them there instead of copying single files.
+
 ## Single VM (e.g. a cloud VM)
 
 ```bash
