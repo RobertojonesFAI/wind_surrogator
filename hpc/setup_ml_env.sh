@@ -1,12 +1,15 @@
 #!/bin/bash
 # One-time setup of the training env "ml" (PyTorch with CUDA + this package), next to the
-# OpenFOAM env "foam". Run it on the login node (it needs internet), from the repository.
+# OpenFOAM env "foam". Run it from the repository on a compute node with internet access
+# (on Borah: `dev-session`), not on a login node: when the login node has a newer glibc than
+# the compute nodes, pip and micromamba pick builds that do not run on the compute nodes.
 #
 #   bash hpc/setup_ml_env.sh
 #   MAMBA_ROOT_PREFIX=/path/to/scratch/mamba bash hpc/setup_ml_env.sh   # if $HOME quota is small
 #
-# The PyPI torch wheels bundle the CUDA runtime; the GPU node only needs a recent NVIDIA
-# driver (check with nvidia-smi on the node: "CUDA Version" must be >= torch.version.cuda).
+# The PyPI torch wheels bundle the CUDA runtime; the GPU node only needs a recent enough
+# NVIDIA driver: "CUDA Version" in nvidia-smi on a GPU node must be >= torch.version.cuda.
+# (Borah, 2026-11: driver 550 = CUDA 12.4; from a compute node pip picks torch 2.6.0+cu124.)
 set -euo pipefail
 
 export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/mamba}"

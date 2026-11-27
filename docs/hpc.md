@@ -79,14 +79,21 @@ Training uses one GPU, so it needs one node. It reads a frozen snapshot of the d
 it can run while the CFD jobs keep adding cases, and a resumed run sees the same files.
 
 ```bash
-bash hpc/setup_ml_env.sh                                        # once: env "ml" with PyTorch
+bash hpc/setup_ml_env.sh                                        # once, on a compute node: env "ml"
 PROJECT=$PROJECT TAG=b1 sbatch -p short hpc/snapshot_dataset.sh  # $PROJECT/snapshots/b1/*.tar
 PROJECT=$PROJECT SNAPSHOT=b1 EXTRA_CONFIG=config/global.yaml \
   sbatch -p gpu -t 2-00:00:00 hpc/train_gpu.slurm                # checkpoints/b1/last.pt, best.pt
 ```
 
+- **Installing the env.** Run `setup_ml_env.sh` on a compute node with internet (Borah:
+  `dev-session`), not on the login node, which may have a newer glibc than the compute nodes.
+- **Driver.** Check the driver on a GPU node first:
+  `srun -p <gpu partition> --gres=gpu:1 -t 00:05:00 nvidia-smi`. Its "CUDA Version" must be
+  at least the `CUDA` that `setup_ml_env.sh` prints at the end.
 - **Partitions.** Check the GPU partitions and their time limits with
-  `sinfo -o "%P %G %l %D"`. A GPU type can be requested with `--gres=gpu:<type>:1`.
+  `sinfo -o "%P %G %l %D"`. A GPU type can be requested with `--gres=gpu:<type>:1`. On Borah
+  use the L40S nodes (`-p gpu-l40 --gres=gpu:L40:1`): the newest GPUs there, 48 GB each.
+  PyTorch builds for CUDA 13 no longer support the older P100 and V100.
 - **Time limit.** A checkpoint is written every epoch. Submit the same command again to
   resume, or chain it with `--dependency=afterany:<jobid>`.
 - **Epochs.** `EPOCHS` defaults to 25; the config's 120 was set for ~1,200 cases.
